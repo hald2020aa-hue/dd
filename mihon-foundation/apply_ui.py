@@ -53,9 +53,9 @@ def patch(root: Path) -> None:
     )
     theme = replace_once_or_already(
         theme,
-        "        isDark = isDark,\n",
-        "        isDark = isDark || appTheme == AppTheme.DEFAULT,\n",
-        "dark default appearance",
+        "                appTheme = appTheme,\n                isDark = isDark,\n                isAmoled = isAmoled,\n",
+        "                appTheme = appTheme,\n                isDark = isDark || appTheme == AppTheme.DEFAULT,\n                isAmoled = isAmoled,\n",
+        "dark default appearance in getThemeColorScheme",
     )
     prefs = pref_file.read_text(encoding="utf-8")
     prefs = replace_once_or_already(

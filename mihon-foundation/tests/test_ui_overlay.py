@@ -18,7 +18,22 @@ class MangaDUIOverlayTest(unittest.TestCase):
         a.parent.mkdir(parents=True, exist_ok=True)
         b.parent.mkdir(parents=True, exist_ok=True)
         p.parent.mkdir(parents=True, exist_ok=True)
-        a.write_text("import eu.kanade.presentation.theme.colorscheme.BaseColorScheme\nAppTheme.DEFAULT to TachiyomiColorScheme,\n        isDark = isDark,\n", encoding="utf-8")
+        # Same two `isDark = isDark` occurrences found in the pinned Mihon upstream.
+        a.write_text(
+            "import eu.kanade.presentation.theme.colorscheme.BaseColorScheme\n"
+            "AppTheme.DEFAULT to TachiyomiColorScheme,\n"
+            "            getThemeColorScheme(\n"
+            "                context = context,\n"
+            "                appTheme = appTheme,\n"
+            "                isDark = isDark,\n"
+            "                isAmoled = isAmoled,\n"
+            "            )\n"
+            "    return colorScheme.getColorScheme(\n"
+            "        isDark = isDark,\n"
+            "        isAmoled = isAmoled,\n"
+            "    )\n",
+            encoding="utf-8",
+        )
         b.write_text("import androidx.compose.ui.platform.LocalContext\nCompositionLocalProvider(LocalNavigator provides navigator) {\n                    text = tab.options.title,\n", encoding="utf-8")
         p.write_text("        if (DeviceUtil.isDynamicColorAvailable) {\n            AppTheme.MONET\n        } else {\n            AppTheme.DEFAULT\n        },", encoding="utf-8")
 
@@ -35,6 +50,10 @@ class MangaDUIOverlayTest(unittest.TestCase):
             self.assertIn("0xFF9BA8EE", first[2].decode())
             self.assertIn("AppTheme.DEFAULT", first[3].decode())
             self.assertIn("LocalLayoutDirection provides LayoutDirection.Rtl", first[1].decode())
+            # Regression: only the getThemeColorScheme argument must change,
+            # never the second identically named argument in BaseColorScheme.
+            self.assertEqual(1, first[0].decode().count("isDark = isDark || appTheme == AppTheme.DEFAULT"))
+            self.assertEqual(1, first[0].decode().count("isDark = isDark,"))
 
     def test_anchor_mismatch_does_not_modify_upstream(self):
         with tempfile.TemporaryDirectory() as temp:
