@@ -43,7 +43,7 @@ class SourcesActivity : ComponentActivity() {
         val engine = SourceManager(SourceCatalogStore(applicationContext))
         setContent {
             MaterialTheme(colorScheme = androidx.compose.material3.darkColorScheme()) {
-                SourcesScreen(engine, onBack = { finish() }, onPreview = { url ->
+                SourcesScreen(engine, onBack = { finish() }, onOpenExtensions = { startActivity(Intent(this, com.example.extensions.ExtensionStoreActivity::class.java)) }, onPreview = { url ->
                     startActivity(Intent(this, SourcePagePreviewActivity::class.java).putExtra("imageUrl", url))
                 })
             }
@@ -55,6 +55,7 @@ class SourcesActivity : ComponentActivity() {
 private fun SourcesScreen(
     engine: SourceManager,
     onBack: () -> Unit,
+    onOpenExtensions: () -> Unit,
     onPreview: (String) -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -138,6 +139,11 @@ private fun SourcesScreen(
                         finally { busy = false }
                     }
                 }) { Text("استيراد كتالوج") }
+            }
+            item {
+                OutlinedButton(onClick = onOpenExtensions) {
+                    Text("متجر ملحقات Mihon / Keiyoushi")
+                }
             }
             item { Text("المصادر المثبتة (${catalog.size})", style = MaterialTheme.typography.titleMedium) }
             if (catalog.isEmpty()) {
