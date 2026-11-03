@@ -1,0 +1,74 @@
+name: Manga D Core — upstream Mihon build
+
+on:
+  push:
+    branches:
+      - feature/manga-d-mihon-foundation
+    paths:
+      - .github/workflows/manga-d-mihon-core.yml
+      - mihon-foundation/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manga-d-mihon-foundation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-real-mihon-core:
+    # Same base OS family used by the upstream Mihon CI.
+    runs-on: ubuntu-26.04
+    timeout-minutes: 95
+    steps:
+      - name: Check out Manga D integration code
+        uses: actions/checkout@v4
+
+      - name: Check out pinned official Mihon source (all modules)
+        uses: actions/checkout@v4
+        with:
+          repository: mihonapp/mihon
+          ref: 8794e89a866a3de578c02cefac1e609bcff5f092
+          path: mihon-upstream
+          persist-credentials: false
+
+      - name: Check provenance and test our integration patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=8794e89a866a3de578c02cefac1e609bcff5f092
+          actual=$(git -C mihon-upstream rev-parse HEAD)
+          test "$actual" = "$expected"
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s mihon-foundation/tests -p 'test_*.py' -v
+          python3 mihon-foundation/patch_upstream.py mihon-upstream
+          git -C mihon-upstream diff --check
+          git -C mihon-upstream diff -- app/build.gradle.kts i18n/src/commonMain/moko-resources/base/strings.xml
+
+      - name: Install JDK 21 for official Mihon Gradle toolchain
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Configure Gradle cache and wrapper
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build genuine Mihon-based Manga D Core APK
+        working-directory: mihon-upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug -Pdist=local -Pinclude-telemetry=false -Penable-updater=false --no-daemon --stacktrace
+          find app/build/outputs/apk -type f -name '*debug*.apk' -print -exec sha256sum {} \;
+          test -n "$(find app/build/outputs/apk -type f -name '*debug*.apk' -print -quit)"
+
+      - name: Upload standalone Manga D Core test APKs
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: manga-d-mihon-core-debug-apks
+          path: mihon-upstream/app/build/outputs/apk/**/*debug*.apk
+          if-no-files-found: error
+          retention-days: 14
