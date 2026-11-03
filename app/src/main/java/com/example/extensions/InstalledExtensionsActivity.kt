@@ -1,5 +1,6 @@
 package com.example.extensions
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -37,7 +38,14 @@ class InstalledExtensionsActivity : ComponentActivity() {
         val store = ExtensionStoreRepository(applicationContext)
         setContent {
             MaterialTheme(colorScheme = androidx.compose.material3.darkColorScheme()) {
-                InstalledExtensionsScreen(scanner, store, onBack = { finish() })
+                InstalledExtensionsScreen(
+                    scanner, store,
+                    onBack = { finish() },
+                    onTryRun = { pkg -> startActivity(
+                        Intent(this, ExtensionRuntimeActivity::class.java)
+                            .putExtra(ExtensionRuntimeActivity.EXTRA_PACKAGE, pkg)
+                    ) }
+                )
             }
         }
     }
@@ -48,6 +56,7 @@ private fun InstalledExtensionsScreen(
     scanner: InstalledExtensionScanner,
     store: ExtensionStoreRepository,
     onBack: () -> Unit,
+    onTryRun: (String) -> Unit,
 ) {
     var refresh by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(true) }
@@ -69,7 +78,7 @@ private fun InstalledExtensionsScreen(
                 }
                 Text("فحص الملحقات المثبتة على الجهاز: المصدر والتوقيع وإصدار واجهة Mihon.")
                 Text(
-                    "تنبيه: هذه مرحلة اكتشاف وتحقق فقط. لم نفعّل تنفيذ كود الملحقات أو البحث والفصول بها.",
+                    "يمكن اختبار تشغيل ملحق موثوق يدويًا. نجاح الفحص لا يضمن توافق مكتبات Mihon أو سلامة كود الملحق.",
                     color = MaterialTheme.colorScheme.error
                 )
                 Button(onClick = { refresh++ }, enabled = !busy) { Text("إعادة فحص الملحقات") }
@@ -90,6 +99,11 @@ private fun InstalledExtensionsScreen(
                         Text(ext.decision.reason,
                             color = if (ext.decision.canInspect) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.error)
+                        if (ext.decision.canInspect && ext.libraryVersion == "1.6") {
+                            OutlinedButton(onClick = { onTryRun(ext.packageName) }) {
+                                Text("اختبار تشغيل الملحق — تجريبي")
+                            }
+                        }
                         if (ext.sourceClasses.isNotEmpty())
                             Text("تعريفات الكود: ${ext.sourceClasses.joinToString()}", style = MaterialTheme.typography.bodySmall)
                         if (ext.declaredSourceNames.isNotEmpty())

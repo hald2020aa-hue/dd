@@ -47,6 +47,9 @@
         </provider>
         <activity android:name=".extensions.InstalledExtensionsActivity"
             android:exported="false" />
+        <activity android:name=".extensions.ExtensionRuntimeActivity"
+            android:exported="false"
+            android:process=":extension_probe" />
     </application>
 
 </manifest>
