@@ -129,8 +129,8 @@ dependencies {
   implementation("com.github.mihonapp:injekt:91edab2317")
   implementation(libs.okhttp)
   // Keiyoushi KeiSource uses the OkHttp 5 response-compression API.
-  implementation("com.squareup.okhttp3:okhttp-brotli:5.5.0")
-  implementation("com.squareup.okhttp3:okhttp-zstd:5.5.0")
+  implementation("com.squareup.okhttp3:okhttp-brotli:5.4.0")
+  implementation("com.squareup.okhttp3:okhttp-zstd:5.4.0")
   implementation("org.jsoup:jsoup:1.18.3")
   // implementation(libs.play.services.location)
   // implementation(libs.retrofit)
