@@ -1,0 +1,38 @@
+name: Manga D Source Engine CI
+on:
+  push:
+    branches: ["main", "feature/**"]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android API 36 / build tools
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "platforms;android-36.1" "build-tools;36.0.0" || true
+      - name: Provide non-secret local build variables
+        run: |
+          cp -n .env.example .env || true
+          if [ ! -f debug.keystore ]; then
+            keytool -genkeypair -keystore debug.keystore -storepass android -keypass android \
+              -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname 'CN=Android Debug,O=Android,C=US'
+          fi
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+      - name: Unit tests and debug build
+        run: gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon --stacktrace
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: manga-d-source-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
