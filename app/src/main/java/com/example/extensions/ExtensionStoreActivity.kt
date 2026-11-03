@@ -1,6 +1,7 @@
 package com.example.extensions
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -98,6 +99,9 @@ private fun ExtensionStoreScreen(
                 }
                 Spacer(Modifier.height(8.dp))
                 Text("فهرس Mihon / Keiyoushi: عرض الملحقات وتنزيلها بعد التحقق من توقيع APK.")
+                OutlinedButton(onClick = {
+                    activity.startActivity(Intent(activity, InstalledExtensionsActivity::class.java))
+                }) { Text("الملحقات المثبتة — فحص الثقة والتوافق") }
                 Text(
                     "تنبيه: تشغيل الملحقات داخل Manga D غير متاح بعد. التثبيت وحده لا يربطها بمحرك القراءة.",
                     color = MaterialTheme.colorScheme.error
