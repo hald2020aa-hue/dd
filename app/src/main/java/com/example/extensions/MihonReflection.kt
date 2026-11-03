@@ -22,7 +22,7 @@ object MihonReflection {
         require(classNames.isNotEmpty() && classNames.size <= 30) { "لا توجد تعريفات مصادر صالحة" }
         val result = ArrayList<Any>()
         for (name in classNames) {
-            require(name.matches(Regex("[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)+"))) {
+            require(name.matches(Regex("[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)+"))) {
                 "اسم تعريف المصدر غير صالح"
             }
             val instance = Class.forName(name, true, classLoader).getDeclaredConstructor().newInstance()
@@ -126,7 +126,7 @@ object MihonReflection {
         val name = last.javaClass.simpleName
         val detail = last.message.orEmpty().take(280)
         return if (last is LinkageError || last is ClassNotFoundException) {
-            "مكتبات تشغيل Mihon غير مكتملة أو غير متوافقة: $name — $detail"
+            MihonRuntimeDiagnostics.explain(last)
         } else "$name — $detail"
     }
 }

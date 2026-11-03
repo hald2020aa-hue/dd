@@ -19,7 +19,7 @@ object ExtensionHostPolicy {
         .map { it.trim() }
         .filter { it.isNotBlank() }
         .map { if (it.startsWith('.')) packageName + it else it }
-        .filter { it.matches(Regex("[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*)+")) }
+        .filter { it.matches(Regex("[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_$][a-zA-Z0-9_$]*)+")) }
         .distinct()
 
     fun evaluate(
