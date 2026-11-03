@@ -41,6 +41,22 @@ class MihonReflectionTest {
         assertEquals("https://example.org/page1.jpg", pages.single().imageUrl)
     }
 
+    class FakeSearchSource {
+        suspend fun getSearchManga(
+            page: Int, query: String,
+            filters: eu.kanade.tachiyomi.source.model.FilterList
+        ): FakePageResult {
+            require(page == 1 && query == "hello" && filters.isEmpty())
+            return FakePageResult(listOf(FakeManga("Search works", "/search-result", null)))
+        }
+    }
+
+    @Test fun emptyMihonFilterListEnablesSearch() = runBlocking {
+        val manga = MihonReflection.search(FakeSearchSource(), "hello")
+        assertEquals("Search works", manga.single().title)
+        assertEquals("/search-result", manga.single().url)
+    }
+
     @Test fun unsupportedMethodReportsError() = runBlocking {
         val source = FakeSource()
         try {

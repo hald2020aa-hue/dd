@@ -54,8 +54,16 @@ object MihonReflection {
         require(query.isNotBlank() && query.length <= 120) { "أدخل اسمًا للبحث" }
         val clazz = source.javaClass.classLoader
         val filterClass = Class.forName("eu.kanade.tachiyomi.source.model.FilterList", true, clazz)
-        val filters = try { filterClass.getDeclaredConstructor().newInstance() }
-        catch (_: NoSuchMethodException) { value(source, "getFilterList") ?: throw IllegalStateException("تعذر إنشاء مرشحات المصدر") }
+        // Mihon 1.6 FilterList exposes a List<Filter<*>> constructor (and a vararg
+        // overload), not a public zero-argument constructor. Reflection must match
+        // the real host API ABI to allow an ordinary unfiltered search.
+        val filters = try {
+            filterClass.getDeclaredConstructor(java.util.List::class.java)
+                .newInstance(emptyList<Any>())
+        } catch (_: NoSuchMethodException) {
+            value(source, "getFilterList")
+                ?: throw IllegalStateException("تعذر إنشاء مرشحات المصدر المتوافقة")
+        }
         return mangaList(invokeSuspend(source, "getSearchManga", 1, query, filters))
     }
 
