@@ -17,14 +17,16 @@ import java.util.concurrent.TimeUnit
  * Only explicitly installed, trusted source definitions are queried.
  */
 class SourceManager(private val catalog: SourceCatalogStore) {
-    private val guardedDns = Dns { hostname ->
-        // Imported rules may be untrusted; never connect to local/private IP addresses.
-        val resolved = Dns.SYSTEM.lookup(hostname)
-        if (resolved.isEmpty() || resolved.any { it.isAnyLocalAddress || it.isLoopbackAddress ||
-            it.isLinkLocalAddress || it.isSiteLocalAddress || it.isMulticastAddress }) {
-            throw IOException("Source DNS resolved to an unsafe network address")
+    private val guardedDns = object : Dns {
+        override fun lookup(hostname: String): List<java.net.InetAddress> {
+            // Imported rules may be untrusted; never connect to local/private IP addresses.
+            val resolved = Dns.SYSTEM.lookup(hostname)
+            if (resolved.isEmpty() || resolved.any { it.isAnyLocalAddress || it.isLoopbackAddress ||
+                it.isLinkLocalAddress || it.isSiteLocalAddress || it.isMulticastAddress }) {
+                throw IOException("Source DNS resolved to an unsafe network address")
+            }
+            resolved
         }
-        resolved
     }
 
     private val client = OkHttpClient.Builder()
