@@ -25,7 +25,7 @@ class SourceManager(private val catalog: SourceCatalogStore) {
                 it.isLinkLocalAddress || it.isSiteLocalAddress || it.isMulticastAddress }) {
                 throw IOException("Source DNS resolved to an unsafe network address")
             }
-            resolved
+            return resolved
         }
     }
 
