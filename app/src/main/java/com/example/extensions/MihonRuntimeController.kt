@@ -44,6 +44,7 @@ class MihonRuntimeController(private val context: Context) {
         val classLoader = DexClassLoader(
             apkPath, context.codeCacheDir.absolutePath, flags.nativeLibraryDir, context.classLoader
         )
+        MihonHostBootstrap.prepare(context)
         val sources = MihonReflection.instantiate(classLoader, rechecked.sourceClasses)
         Session(packageName, sources)
     }
