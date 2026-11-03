@@ -126,7 +126,7 @@ dependencies {
   implementation("io.reactivex:rxjava:1.3.8")
   implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
   implementation("androidx.preference:preference-ktx:1.2.1")
-  implementation("com.github.mihonapp:injekt:1.0.0")
+  implementation("com.github.mihonapp:injekt:91edab2317")
   implementation(libs.okhttp)
   implementation("org.jsoup:jsoup:1.18.3")
   // implementation(libs.play.services.location)
