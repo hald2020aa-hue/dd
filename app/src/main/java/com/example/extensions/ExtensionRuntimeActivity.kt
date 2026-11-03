@@ -59,6 +59,7 @@ private fun RuntimeScreen(
 ) {
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
+    var showAllSources by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("لم يتم تشغيل كود الملحق بعد.") }
     var session by remember { mutableStateOf<MihonRuntimeController.Session?>(null) }
     var currentSource by remember { mutableStateOf<Any?>(null) }
@@ -105,8 +106,13 @@ private fun RuntimeScreen(
                 Text(status, color = MaterialTheme.colorScheme.tertiary)
             }
             if (session != null) {
-                item { Text("المصادر المتاحة في الملحق", style = MaterialTheme.typography.titleMedium) }
-                items(session!!.sources.indices.toList()) { index ->
+                item {
+                    OutlinedButton(onClick = { showAllSources = !showAllSources }) {
+                        Text(if (showAllSources) "إخفاء قائمة المصادر" else "اختيار مصدر آخر (${session!!.sources.size})")
+                    }
+                    Text("المصدر الحالي: ${currentSource?.let { MihonReflection.sourceName(it) } ?: "لا يوجد"}")
+                }
+                if (showAllSources) items(session!!.sources.indices.toList()) { index ->
                     val source = session!!.sources[index]
                     OutlinedButton(onClick = {
                         currentSource = source
@@ -143,6 +149,8 @@ private fun RuntimeScreen(
                             }
                         }) { Text("استعراض") }
                     }
+                    // Keep feedback next to actions; previously it was 27 rows above these buttons.
+                    Text(status, color = MaterialTheme.colorScheme.tertiary)
                 }
                 items(results, key = { it.url }) { item ->
                     Card(Modifier.fillMaxWidth()) {

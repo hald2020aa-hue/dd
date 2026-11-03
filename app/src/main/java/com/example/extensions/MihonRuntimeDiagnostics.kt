@@ -18,6 +18,15 @@ object MihonRuntimeDiagnostics {
     }
 
     fun explain(error: Throwable): String {
+        // Linkage errors are not always missing classes. Preserve the method/field
+        // signature for ABI mismatches instead of mislabeling them "missing class".
+        if (error is NoSuchMethodError || error is AbstractMethodError || error is NoSuchFieldError) {
+            return "عدم توافق بين إصدار مكتبات Mihon والملحق: ${error.javaClass.simpleName} — " +
+                error.message.orEmpty().take(350)
+        }
+        if (error is UnsatisfiedLinkError) {
+            return "مكتبة تشغيل أصلية غير متوفرة أو غير متوافقة: ${error.message.orEmpty().take(300)}"
+        }
         val className = missingClass(error) ?: "غير محددة من رسالة Android"
         val requiredPart = when {
             className.startsWith("eu.kanade.tachiyomi.source.") ->

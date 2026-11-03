@@ -133,8 +133,13 @@ object MihonReflection {
         while (last.cause != null && seen.add(last)) last = last.cause!!
         val name = last.javaClass.simpleName
         val detail = last.message.orEmpty().take(280)
-        return if (last is LinkageError || last is ClassNotFoundException) {
-            MihonRuntimeDiagnostics.explain(last)
-        } else "$name — $detail"
+        return when (last) {
+            is LinkageError, is ClassNotFoundException -> MihonRuntimeDiagnostics.explain(last)
+            is java.net.UnknownHostException -> "فشل DNS أو الموقع محجوب: $detail"
+            is java.net.SocketTimeoutException -> "انتهت مهلة الاتصال بالموقع: $detail"
+            is javax.net.ssl.SSLException -> "فشل الاتصال الآمن SSL/TLS: $detail"
+            is java.io.IOException -> "فشل طلب الشبكة: $name — $detail"
+            else -> "$name — $detail"
+        }
     }
 }

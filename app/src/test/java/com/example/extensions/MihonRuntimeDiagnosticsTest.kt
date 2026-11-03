@@ -5,6 +5,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MihonRuntimeDiagnosticsTest {
+    @Test fun abiMismatchIsNotPresentedAsMissingClass() {
+        val msg = MihonRuntimeDiagnostics.explain(
+            NoSuchMethodError("okhttp3.OkHttpClient.newBuilder()")
+        )
+        assertTrue(msg.contains("عدم توافق"))
+        assertTrue(msg.contains("okhttp3.OkHttpClient"))
+    }
+
     @Test fun androidDescriptorIsDecoded() {
         val err = NoClassDefFoundError("Failed resolution of: Leu/kanade/tachiyomi/source/online/HttpSource;")
         assertEquals("eu.kanade.tachiyomi.source.online.HttpSource", MihonRuntimeDiagnostics.missingClass(err))
