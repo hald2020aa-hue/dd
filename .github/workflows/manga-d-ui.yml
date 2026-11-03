@@ -1,0 +1,74 @@
+name: Manga D UI — original Mihon engine (ARM64)
+
+on:
+  push:
+    branches:
+      - feature/manga-d-ui-v1
+    paths:
+      - .github/workflows/manga-d-ui.yml
+      - mihon-foundation/apply_ui.py
+      - mihon-foundation/ui/**
+      - mihon-foundation/tests/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manga-d-ui-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  manga-d-arabic-ui-arm64:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 95
+    steps:
+      - name: Checkout Manga D custom UI integration
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned complete official Mihon source
+        uses: actions/checkout@v4
+        with:
+          repository: mihonapp/mihon
+          ref: 8794e89a866a3de578c02cefac1e609bcff5f092
+          path: mihon-upstream
+          persist-credentials: false
+
+      - name: Validate patches and apply Arabic Manga D theme
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C mihon-upstream rev-parse HEAD)" = 8794e89a866a3de578c02cefac1e609bcff5f092
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s mihon-foundation/tests -p 'test_*.py' -v
+          python3 mihon-foundation/patch_upstream.py mihon-upstream
+          python3 mihon-foundation/apply_ui.py mihon-upstream
+          git -C mihon-upstream diff --check
+          echo 'Manga D UI patch verified against pinned Mihon source.'
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build Manga D UI APK using unmodified Mihon runtime
+        working-directory: mihon-upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug -Pdist=local -Pinclude-telemetry=false -Penable-updater=false --no-daemon --stacktrace
+          APK=app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
+          test -s "$APK"
+          sha256sum "$APK"
+
+      - name: Upload only ARM64 Manga D UI APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: manga-d-ui-arm64-debug-apk
+          path: mihon-upstream/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
+          if-no-files-found: error
+          retention-days: 14
