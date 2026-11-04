@@ -4,6 +4,8 @@
 (() => {
   "use strict";
   const mode = "__QARI_MODE__";
+  // window.__qariMangaV2Order: segment-aware, persistent HTML image order.
+
   const here = new URL(location.href);
   const host = here.hostname.toLowerCase().replace(/^www\./, "");
   const result = { mode, url: here.href, items: [], chapters: [], pages: [], next: "", current: 1, total: 0, blocked: false };
@@ -19,15 +21,23 @@
   result.blocked = Boolean(isBlocked || document.querySelector("#challenge-form, #cf-challenge-running"));
   if (result.blocked) return JSON.stringify(result);
 
+  // Dynamic reader themes can use src, data-src, srcset and placeholders.
   const firstImageUrl = el => {
     const img = el?.matches?.("img") ? el : el?.querySelector?.("img");
     if (!img) return "";
-    let raw = img.getAttribute("data-src") || img.getAttribute("data-lazy-src") ||
-      img.getAttribute("data-original") || img.getAttribute("data-cfsrc") ||
-      img.getAttribute("data-srcset") || img.currentSrc || img.getAttribute("src") || "";
-    raw = raw.split(",")[0].trim().split(/\s+/)[0];
-    const url = absolute(raw);
-    return url?.protocol === "https:" ? url.href : "";
+    const candidates = [
+      img.getAttribute("data-src"), img.getAttribute("data-lazy-src"),
+      img.getAttribute("data-original"), img.getAttribute("data-cfsrc"),
+      img.getAttribute("data-srcset"), img.getAttribute("srcset"),
+      img.currentSrc, img.getAttribute("src"),
+    ];
+    for (const raw of candidates) {
+      if (!raw || raw.startsWith("data:") || raw.startsWith("blob:")) continue;
+      const candidate = raw.split(",")[0].trim().split(/\s+/)[0];
+      const link = absolute(candidate);
+      if (link?.protocol === "https:") return link.href;
+    }
+    return "";
   };
   const seen = new Set();
 
@@ -60,7 +70,7 @@
       if (!here.searchParams.get("type") && /manhwa|manhua|doujinshi|comic|مانهوا|دوجينشي|كوميكس/.test(categoryText)) continue;
       seen.add(url);
       result.items.push({ url, title, cover });
-      if (result.items.length >= 150) break;
+      if (result.items.length >= 500) break;
     }
 
     const pageFromUrl = u => {
@@ -89,6 +99,32 @@
     candidatePages.sort((a, b) => a.page - b.page);
     result.next = candidatePages[0]?.url || "";
     if (result.total > 500) result.total = 500;
+    // Scroll through lazy-loaded catalog cards without losing earlier results.
+    const archiveKey = here.origin + here.pathname + here.search;
+    let archiveScan = window.__qariMangaArchiveScan;
+    if (!archiveScan || archiveScan.key !== archiveKey) {
+      archiveScan = { key: archiveKey, cards: {}, order: [], stable: 0, passes: 0, lastSize: -1 };
+      window.__qariMangaArchiveScan = archiveScan;
+    }
+    for (const card of result.items) {
+      if (!archiveScan.cards[card.url]) archiveScan.order.push(card.url);
+      archiveScan.cards[card.url] = card;
+    }
+    result.items = archiveScan.order.map(url => archiveScan.cards[url]).slice(0, 500);
+    const archiveScroller = document.scrollingElement || document.documentElement;
+    const viewport = Math.max(window.innerHeight || 0, 1);
+    const bodyHeight = Math.max(archiveScroller?.scrollHeight || 0, document.body?.scrollHeight || 0);
+    const scrollTop = archiveScroller?.scrollTop || window.scrollY || 0;
+    const archiveBottom = scrollTop + viewport + 15 >= bodyHeight;
+    archiveScan.passes++;
+    if (archiveBottom && result.items.length === archiveScan.lastSize) archiveScan.stable++;
+    else archiveScan.stable = 0;
+    archiveScan.lastSize = result.items.length;
+    if (!archiveBottom && archiveScan.passes < 360) {
+      window.scrollTo(0, Math.min(bodyHeight, scrollTop + Math.max(280, viewport * 1.15)));
+    }
+    result.pending = (!archiveBottom || archiveScan.stable < 2) && archiveScan.passes < 360;
+    result.incomplete = !archiveBottom && archiveScan.passes >= 360;
   } else if (mode === "detail") {
     const chapterNodes = document.querySelectorAll(
       ".wp-manga-chapter a[href], .listing-chapters_wrap a[href], .chapter-list a[href], " +
@@ -104,31 +140,70 @@
       if (result.chapters.length >= 2500) break;
     }
   } else if (mode === "chapter") {
-    const imgs = document.querySelectorAll(
-      ".reading-content img, .page-break img, #readerarea img, .chapter-content img, " +
-      ".reader img, .rdminimal img, .chapter-page img, img[data-src], img[data-lazy-src]"
-    );
-    for (const img of imgs) {
-      const url = firstImageUrl(img);
-      if (!url || seen.has(url) || /logo|avatar|icon|banner|thumb/i.test(url)) continue;
-      seen.add(url);
-      result.pages.push({ url, position: result.pages.length });
-      if (result.pages.length >= 3000) break;
+    // Each page is a stable DOM snapshot; lazy-loaded images may appear only
+    // after scrolling. Retain order and unique image URLs across JS calls.
+    const key = here.origin + here.pathname + here.search;
+    let scan = window.__qariMangaChapterScan;
+    if (!scan || scan.key !== key) {
+      scan = { key, urls: [], passes: 0, stable: 0, lastSize: -1 };
+      window.__qariMangaChapterScan = scan;
     }
-    // Some reader themes split one chapter across several HTML pages.
-    // Follow only pagination URLs for the SAME chapter, not the next chapter.
+    const imgSelector =
+      ".reading-content img,.page-break img,#readerarea img,.chapter-content img," +
+      ".reader img,.rdminimal img,.chapter-page img,img[data-src],img[data-lazy-src]";
+    // Merge each DOM snapshot into the stable list. A late image in front of
+    // previously known images is inserted before the next known DOM anchor.
+    const visible = [];
+    const observed = new Set();
+    for (const img of document.querySelectorAll(imgSelector)) {
+      const address = firstImageUrl(img);
+      if (!address || observed.has(address) || /logo|avatar|icon|banner|thumb/i.test(address)) continue;
+      observed.add(address);
+      visible.push(address);
+      if (visible.length >= 5000) break;
+    }
+    for (let i = 0; i < visible.length; i++) {
+      const image = visible[i];
+      if (scan.urls.includes(image)) continue;
+      const next = visible.slice(i + 1).find(url => scan.urls.includes(url));
+      if (next) scan.urls.splice(scan.urls.indexOf(next), 0, image);
+      else {
+        const prior = visible.slice(0, i).reverse().find(url => scan.urls.includes(url));
+        if (prior) scan.urls.splice(scan.urls.indexOf(prior) + 1, 0, image);
+        else scan.urls.push(image);
+      }
+    }
+    result.pages = scan.urls.map((url, position) => ({url, position}));
+
+    const scroller = document.scrollingElement || document.documentElement;
+    const viewHeight = Math.max(window.innerHeight || 0, 1);
+    const height = Math.max(scroller?.scrollHeight || 0, document.body?.scrollHeight || 0);
+    const top = scroller?.scrollTop || window.scrollY || 0;
+    const atBottom = (top + viewHeight + 15 >= height);
+    scan.passes++;
+    if (scan.urls.length === scan.lastSize && atBottom) scan.stable++;
+    else scan.stable = 0;
+    scan.lastSize = scan.urls.length;
+    if (!atBottom && scan.passes < 600) {
+      window.scrollTo(0, Math.min(height, top + Math.max(280, viewHeight * 1.15)));
+    }
+    result.pending = (!atBottom || scan.stable < 3) && scan.passes < 600;
+    result.incomplete = !atBottom && scan.passes >= 600;
+
+    // Reader themes may split a chapter into multiple same-path HTML pages.
+    // Navigate only URLs for this exact chapter (never the next chapter).
     const currentNumber = Number(here.searchParams.get("page") || here.searchParams.get("paged") || 1);
     const chapterNext = [];
     for (const a of document.querySelectorAll(
-      ".pagination a[href], .page-links a[href], a[rel='next'], a.next-page[href]"
+      ".pagination a[href],.page-links a[href],a[rel='next'],a.next-page[href]"
     )) {
       const candidate = absolute(a.href);
       if (!candidate || candidate.protocol !== "https:" || candidate.hostname !== here.hostname) continue;
       if (candidate.pathname.replace(/\/$/, "") !== here.pathname.replace(/\/$/, "")) continue;
       const n = Number(candidate.searchParams.get("page") || candidate.searchParams.get("paged") || 0);
-      if (n > currentNumber && n < 3001) chapterNext.push({n, url: candidate.href});
+      if (n > currentNumber && n < 3001) chapterNext.push({ n, url: candidate.href });
     }
-    chapterNext.sort((a,b)=>a.n-b.n);
+    chapterNext.sort((a, b) => a.n - b.n);
     result.next = chapterNext[0]?.url || "";
   }
   return JSON.stringify(result);

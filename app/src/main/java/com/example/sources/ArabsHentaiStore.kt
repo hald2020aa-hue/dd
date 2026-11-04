@@ -7,7 +7,7 @@ import android.database.sqlite.SQLiteOpenHelper
 
 /** Independent store: never migrates/drops existing Manga D Room tables. */
 class ArabsHentaiStore(context: Context) : SQLiteOpenHelper(
-    context.applicationContext, "manga_d_arabs_cache_v1.db", null, 1,
+    context.applicationContext, "manga_d_arabs_cache_v1.db", null, 2,
 ) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE works(
@@ -21,6 +21,7 @@ class ArabsHentaiStore(context: Context) : SQLiteOpenHelper(
             position INTEGER NOT NULL, PRIMARY KEY(work_url,url))""")
         db.execSQL("""CREATE TABLE pages(
             chapter_url TEXT NOT NULL, url TEXT NOT NULL, position INTEGER NOT NULL,
+            segment INTEGER NOT NULL DEFAULT 1,
             PRIMARY KEY(chapter_url,url))""")
         db.execSQL("""CREATE TABLE archive_progress(
             section TEXT PRIMARY KEY, next_url TEXT, page_count INTEGER NOT NULL DEFAULT 0,
@@ -39,11 +40,16 @@ class ArabsHentaiStore(context: Context) : SQLiteOpenHelper(
         db.execSQL("CREATE INDEX work_section_title ON works(section,title)")
         db.execSQL("CREATE INDEX chapters_work ON chapters(work_url,position)")
         db.execSQL("CREATE INDEX pages_chapter ON pages(chapter_url,position)")
+        db.execSQL("CREATE INDEX pages_chapter_segments ON pages(chapter_url,segment,position)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Future migrations must be incremental. Deleting users' imported data is forbidden.
-        throw IllegalStateException("No migration defined for manga cache version $newVersion")
+        if (oldVersion == 1 && newVersion == 2) {
+            db.execSQL("ALTER TABLE pages ADD COLUMN segment INTEGER NOT NULL DEFAULT 1")
+            db.execSQL("CREATE INDEX pages_chapter_segments ON pages(chapter_url,segment,position)")
+            return
+        }
+        throw IllegalStateException("No safe migration for cache $oldVersion -> $newVersion")
     }
 
     fun list(section: ArabsSection, query: String = ""): List<ArabsWork> {
@@ -71,9 +77,12 @@ class ArabsHentaiStore(context: Context) : SQLiteOpenHelper(
 
     fun pages(chapterUrl: String): List<ArabsPage> = readableDatabase.query(
         "pages", arrayOf("url", "position"), "chapter_url=?",
-        arrayOf(chapterUrl), null, null, "position ASC",
+        arrayOf(chapterUrl), null, null, "segment ASC,position ASC,url ASC",
     ).use { c ->
-        buildList { while (c.moveToNext()) add(ArabsPage(c.getString(0), c.getInt(1))) }
+        buildList {
+            var index = 0
+            while (c.moveToNext()) add(ArabsPage(c.getString(0), index++))
+        }
     }
 
     private fun storedNext(db: SQLiteDatabase, section: ArabsSection): String? = db.rawQuery(
@@ -167,7 +176,8 @@ class ArabsHentaiStore(context: Context) : SQLiteOpenHelper(
         try {
             db.delete("visited_archive", "section=?", arrayOf(section.name))
             db.delete("archive_progress", "section=?", arrayOf(section.name))
-            db.execSQL("UPDATE works SET detail_attempts=0 WHERE section=? AND details_done=0",
+            // Refresh every existing title for NEW chapters, without removing cache.
+            db.execSQL("UPDATE works SET detail_attempts=0,details_done=0 WHERE section=?",
                 arrayOf(section.name))
             // IMPORTANT: do not delete the cached manga titles, chapters or pages.
             db.setTransactionSuccessful()
@@ -211,6 +221,24 @@ class ArabsHentaiStore(context: Context) : SQLiteOpenHelper(
         ).use { c -> if (c.moveToFirst()) ArabsWork(c.getString(0), c.getString(1), c.getString(2)) else null }
     }
 
+    fun nextUnscannedChapter(
+        section: ArabsSection,
+        excluded: Set<String> = emptySet(),
+    ): ArabsChapter? {
+        val sql = "SELECT c.url,c.title,c.position FROM chapters c " +
+            "JOIN works w ON w.url=c.work_url WHERE w.section=? " +
+            "AND NOT EXISTS (SELECT 1 FROM chapter_progress p " +
+            "WHERE p.chapter_url=c.url AND p.done=1) " +
+            "ORDER BY w.updated_at ASC,c.position ASC"
+        return readableDatabase.rawQuery(sql, arrayOf(section.name)).use { c ->
+            while (c.moveToNext()) {
+                val url = c.getString(0)
+                if (url !in excluded) return@use ArabsChapter(url, c.getString(1), c.getInt(2))
+            }
+            null
+        }
+    }
+
     fun chapterRemaining(chapterUrl: String): String? = readableDatabase.rawQuery(
         "SELECT next_url FROM chapter_progress WHERE chapter_url=? AND done=0",
         arrayOf(chapterUrl),
@@ -220,6 +248,53 @@ class ArabsHentaiStore(context: Context) : SQLiteOpenHelper(
         "SELECT done FROM chapter_progress WHERE chapter_url=?",
         arrayOf(chapterUrl),
     ).use { c -> c.moveToFirst() && c.getInt(0) == 1 }
+
+    /** A chapter may be spread across ?page=1, ?page=2 etc. */
+    private fun pageSegment(pageUrl: String): Int {
+        val uri = android.net.Uri.parse(pageUrl)
+        val raw = uri.getQueryParameter("page") ?: uri.getQueryParameter("paged")
+        return raw?.toIntOrNull()?.coerceIn(1, 3000) ?: 1
+    }
+
+    /** Preserve position inside each HTML page while keeping the first origin
+     * for duplicate image URLs. Late-loaded images may update their DOM slot.
+     */
+    private fun orderedChapterPages(
+        db: SQLiteDatabase,
+        chapterUrl: String,
+        htmlPageUrl: String,
+        images: List<ArabsPage>,
+    ) {
+        val segment = pageSegment(htmlPageUrl)
+        val known = mutableMapOf<String, Pair<Int, Int>>()
+        db.rawQuery(
+            "SELECT url,segment,position FROM pages WHERE chapter_url=?",
+            arrayOf(chapterUrl),
+        ).use { c ->
+            while (c.moveToNext()) known[c.getString(0)] = c.getInt(1) to c.getInt(2)
+        }
+        images.distinctBy { it.url }.forEach { image ->
+            if (!image.url.startsWith("https://") || !isSafePublicUrl(image.url)) return@forEach
+            val prior = known[image.url]
+            if (prior == null) {
+                db.insertWithOnConflict("pages", null, ContentValues().apply {
+                    put("chapter_url", chapterUrl)
+                    put("url", image.url)
+                    put("position", image.position)
+                    put("segment", segment)
+                }, SQLiteDatabase.CONFLICT_IGNORE)
+                known[image.url] = segment to image.position
+            } else if (segment < prior.first ||
+                (segment == prior.first && image.position != prior.second)
+            ) {
+                db.execSQL(
+                    "UPDATE pages SET segment=?,position=? WHERE chapter_url=? AND url=?",
+                    arrayOf(segment, image.position, chapterUrl, image.url),
+                )
+                known[image.url] = segment to image.position
+            }
+        }
+    }
 
     /** Insert each page and persist the cursor atomically before navigation. */
     fun saveChapterPage(
@@ -239,12 +314,7 @@ class ArabsHentaiStore(context: Context) : SQLiteOpenHelper(
         val db = writableDatabase
         db.beginTransaction()
         try {
-            images.distinctBy { it.url }.forEach { image ->
-                if (!image.url.startsWith("https://") || !isSafePublicUrl(image.url)) return@forEach
-                db.insertWithOnConflict("pages", null, ContentValues().apply {
-                    put("chapter_url", chapterUrl); put("url", image.url); put("position", image.position)
-                }, SQLiteDatabase.CONFLICT_IGNORE)
-            }
+            orderedChapterPages(db, chapterUrl, pageUrl, images)
             db.insertWithOnConflict("chapter_visited", null, ContentValues().apply {
                 put("chapter_url", chapterUrl); put("page_url", pageUrl)
             }, SQLiteDatabase.CONFLICT_IGNORE)
@@ -269,16 +339,15 @@ class ArabsHentaiStore(context: Context) : SQLiteOpenHelper(
         )
     }
 
-    fun savePages(chapterUrl: String, items: List<ArabsPage>) {
+    fun savePages(
+        chapterUrl: String,
+        items: List<ArabsPage>,
+        htmlPageUrl: String = chapterUrl,
+    ) {
         val db = writableDatabase
         db.beginTransaction()
         try {
-            items.distinctBy { it.url }.forEach { image ->
-                if (!isSafePublicUrl(image.url) || !image.url.startsWith("https://")) return@forEach
-                db.insertWithOnConflict("pages", null, ContentValues().apply {
-                    put("chapter_url", chapterUrl); put("url", image.url); put("position", image.position)
-                }, SQLiteDatabase.CONFLICT_REPLACE)
-            }
+            orderedChapterPages(db, chapterUrl, htmlPageUrl, items)
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }

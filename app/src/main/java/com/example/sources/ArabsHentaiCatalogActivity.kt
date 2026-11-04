@@ -79,7 +79,7 @@ private fun ArabsCatalogScreen(
     onReadChapter: (String) -> Unit,
 ) {
     var search by remember(state.section) { mutableStateOf("") }
-    var showBrowser by remember { mutableStateOf(true) }
+    var showBrowser by remember { mutableStateOf(state.works.isEmpty()) }
     BackHandler(state.selectedWork != null || state.selectedChapter != null) {
         engine.backToCatalog()
     }
@@ -88,7 +88,7 @@ private fun ArabsCatalogScreen(
         Column(modifier = Modifier.fillMaxSize().padding(10.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onBack) { Text("رجوع") }
-                Text("Manga D Core — فهرس القراءة", style = MaterialTheme.typography.titleLarge)
+                Text("Manga D UI — فهرس القراءة", style = MaterialTheme.typography.titleLarge)
             }
             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 items(ArabsSection.entries) { section ->
@@ -115,7 +115,7 @@ private fun ArabsCatalogScreen(
             }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Button(enabled = !state.syncing, onClick = { engine.startSync(); showBrowser = true }) {
-                    Text("استيراد تلقائي")
+                    Text("مزامنة العناوين والفصول وجميع الصور")
                 }
                 OutlinedButton(enabled = state.syncing, onClick = { engine.pause() }) { Text("إيقاف") }
                 OutlinedButton(onClick = { engine.refreshFromFirst(); showBrowser = true }) {
@@ -123,7 +123,10 @@ private fun ArabsCatalogScreen(
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                OutlinedButton(onClick = { showBrowser = !showBrowser }) {
+                OutlinedButton(onClick = {
+                    if (!showBrowser) engine.openSiteIfNeeded()
+                    showBrowser = !showBrowser
+                }) {
                     Text(if (showBrowser) "إخفاء المتصفح" else "عرض المتصفح")
                 }
                 OutlinedButton(onClick = engine::refreshView) { Text("تحديث الصفحة") }
@@ -178,7 +181,7 @@ private fun ArabsCatalogScreen(
                         it.title.contains(search, ignoreCase = true)
                     }
                 }
-                Text("العناوين (${filtered.size})", style = MaterialTheme.typography.titleMedium)
+                Text("العناوين المحفوظة (${filtered.size}) — بدون إعادة استيراد", style = MaterialTheme.typography.titleMedium)
                 LazyColumn(modifier = Modifier.weight(1f)) {
                     items(filtered, key = { it.url }) { work ->
                         Card(

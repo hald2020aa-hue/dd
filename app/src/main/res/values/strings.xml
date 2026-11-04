@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">مكتبة المانجا والمواقع</string>
+    <string name="app_name">Manga D UI</string>
     <string name="drawer_login_prompt">انقر هنا لتسجيل الدخول</string>
     <string name="nav_storage">التخزين</string>
     <string name="nav_recommendations">التوصيات</string>

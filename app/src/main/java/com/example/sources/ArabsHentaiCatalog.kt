@@ -24,12 +24,20 @@ enum class ArabsSection(val title: String, val startUrl: String, val type: Strin
     /** Some themes omit the type filter from pagination links: preserve it. */
     fun adaptedArchiveUrl(url: String): String? {
         val uri = safeUrl(url) ?: return null
-        if (!uri.path.orEmpty().startsWith("/manga")) return null
-        val urlType = uri.getQueryParameter("type")
+        val path = uri.path.orEmpty().lowercase(Locale.ROOT)
+        val validPath = path == "/manga" || path == "/manga/" ||
+            Regex("^/manga/page/[0-9]+/?$").matches(path)
+        if (!validPath) return null
+        val urlType = uri.getQueryParameter("type")?.lowercase(Locale.ROOT)
         if (type == null && !urlType.isNullOrBlank()) return null
         if (type != null && urlType != null && urlType != type) return null
-        return if (type != null && urlType == null) uri.buildUpon()
-            .appendQueryParameter("type", type).build().toString() else uri.toString()
+        val adapted = if (type != null && urlType == null) {
+            uri.buildUpon().appendQueryParameter("type", type).build().toString()
+        } else {
+            uri.toString()
+        }
+        // Don't leak a manga listing into the other three filtered sections.
+        return adapted.takeIf { archiveUrl(it) != null }
     }
 
     companion object {
