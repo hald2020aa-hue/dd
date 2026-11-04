@@ -26,7 +26,7 @@ class ExampleRobolectricTest {
     fun verifyAppNameAndDrawerNavigation() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val appName = context.getString(R.string.app_name)
-        assertEquals("مكتبة المانجا والمواقع", appName)
+        assertEquals("Manga D UI", appName)
 
         // Drawer is open initially matching 00:00 of the reference video
         composeTestRule.onNodeWithTag("navigation_drawer").assertIsDisplayed()
