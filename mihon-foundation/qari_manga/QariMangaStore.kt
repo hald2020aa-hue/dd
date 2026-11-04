@@ -184,7 +184,7 @@ class QariMangaStore(context: Context) : SQLiteOpenHelper(
         val visited = JSONArray().apply { value.visited.forEach { put(it) } }
         writableDatabase.execSQL(
             "INSERT OR REPLACE INTO progress(section,phase,next_url,visited,total) VALUES(?,?,?,?,?)",
-            arrayOf(section.key, value.phase, value.nextUrl, visited.toString(), value.total),
+            arrayOf<Any?>(section.key, value.phase, value.nextUrl, visited.toString(), value.total),
         )
     }
 
@@ -221,7 +221,7 @@ class QariMangaStore(context: Context) : SQLiteOpenHelper(
             val stored = JSONArray().apply { visited.forEach { put(it) } }
             db.execSQL(
                 "INSERT OR REPLACE INTO progress(section,phase,next_url,visited,total) VALUES(?,?,?,?,?)",
-                arrayOf(section.key, phase, checkpoint, stored.toString(), maxOf(state.total, total)),
+                arrayOf<Any?>(section.key, phase, checkpoint, stored.toString(), maxOf(state.total, total)),
             )
             db.setTransactionSuccessful()
         } finally {
@@ -249,11 +249,11 @@ class QariMangaStore(context: Context) : SQLiteOpenHelper(
                     val name = obj.optString("title").take(200).ifBlank { "الفصل ${i + 1}" }
                     db.execSQL(
                         "INSERT OR IGNORE INTO chapters(section,title_url,url,name,rank) VALUES(?,?,?,?,?)",
-                        arrayOf(section.key, url, chUrl, name, i),
+                        arrayOf<Any?>(section.key, url, chUrl, name, i),
                     )
                     db.execSQL(
                         "UPDATE chapters SET name=?,rank=? WHERE section=? AND url=?",
-                        arrayOf(name, i, section.key, chUrl),
+                        arrayOf<Any?>(name, i, section.key, chUrl),
                     )
                     count++
                 }
