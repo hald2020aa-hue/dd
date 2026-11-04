@@ -12,7 +12,7 @@ import subprocess
 
 UPSTREAM_SHA = "8794e89a866a3de578c02cefac1e609bcff5f092"
 NEW_APP_ID = "com.aistudio.mangareader.mihoncore"
-NEW_APP_NAME = "Manga D Core"
+NEW_APP_NAME = "Manga D UI"
 
 
 def replace_once(text: str, old: str, new: str, path: Path) -> str:

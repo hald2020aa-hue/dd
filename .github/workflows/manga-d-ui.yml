@@ -9,6 +9,9 @@ on:
       - mihon-foundation/apply_ui.py
       - mihon-foundation/ui/**
       - mihon-foundation/tests/**
+      - mihon-foundation/apply_mihon_sync.py
+      - mihon-foundation/qari_manga/**
+      - mihon-foundation/patch_upstream.py
   workflow_dispatch:
 
 permissions:
@@ -42,6 +45,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s mihon-foundation/tests -p 'test_*.py' -v
           python3 mihon-foundation/patch_upstream.py mihon-upstream
           python3 mihon-foundation/apply_ui.py mihon-upstream
+          python3 mihon-foundation/apply_mihon_sync.py mihon-upstream
+          node mihon-foundation/tests/test_scan.cjs
           git -C mihon-upstream diff --check
           echo 'Manga D UI patch verified against pinned Mihon source.'
 
