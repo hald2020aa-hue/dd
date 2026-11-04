@@ -32,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
@@ -58,6 +59,7 @@ private fun SourcesScreen(
     onPreview: (String) -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var catalog by remember { mutableStateOf(engine.availableSources()) }
     var selected by remember { mutableStateOf<SourceDefinition?>(null) }
     var editorVisible by remember { mutableStateOf(false) }
@@ -138,6 +140,19 @@ private fun SourcesScreen(
                         finally { busy = false }
                     }
                 }) { Text("استيراد كتالوج") }
+            }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text("ArabsHentai — مصادر القراءة المدمجة", style = MaterialTheme.typography.titleMedium)
+                        Text("مانجا، مانهوا، دوجينشي، كوميكس؛ استيراد الصفحات والفصول وحفظ التقدم محليًا.")
+                        Button(onClick = {
+                            context.startActivity(Intent(context, ArabsHentaiCatalogActivity::class.java))
+                        }) {
+                            Text("فتح الفهرس العربي ومزامنة الأقسام")
+                        }
+                    }
+                }
             }
             item { Text("المصادر المثبتة (${catalog.size})", style = MaterialTheme.typography.titleMedium) }
             if (catalog.isEmpty()) {

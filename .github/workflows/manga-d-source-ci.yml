@@ -14,9 +14,15 @@ jobs:
           distribution: temurin
           java-version: '21'
       - name: Provide non-secret local build variables
+        env:
+          MANGA_D_DEBUG_KEYSTORE_B64: ${{ secrets.MANGA_D_DEBUG_KEYSTORE_B64 }}
         run: |
           cp -n .env.example .env || true
-          if [ ! -f debug.keystore ]; then
+          if [ -n "$MANGA_D_DEBUG_KEYSTORE_B64" ]; then
+            printf '%s' "$MANGA_D_DEBUG_KEYSTORE_B64" | base64 --decode > debug.keystore
+            keytool -list -keystore debug.keystore -storepass android -alias androiddebugkey >/dev/null
+          elif [ ! -f debug.keystore ]; then
+            echo '::warning::Temporary APK signing key; set the MANGA_D_DEBUG_KEYSTORE_B64 secret for updates'
             keytool -genkeypair -keystore debug.keystore -storepass android -keypass android \
               -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
               -dname 'CN=Android Debug,O=Android,C=US'
