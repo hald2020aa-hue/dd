@@ -42,15 +42,21 @@ class ArabsHentaiCatalogActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme(colorScheme = androidx.compose.material3.darkColorScheme()) {
+                val initial = remember {
+                    intent.getStringExtra("section")?.let { raw ->
+                        ArabsSection.entries.firstOrNull { it.name == raw }
+                    } ?: ArabsSection.MANGA
+                }
                 val store = remember { ArabsHentaiStore(applicationContext) }
                 var state by remember { mutableStateOf(
                     ArabsHentaiBrowserEngine.UiState(
-                        works = store.list(ArabsSection.MANGA),
-                        progress = store.progress(ArabsSection.MANGA),
+                        section = initial,
+                        works = store.list(initial),
+                        progress = store.progress(initial),
                     ),
                 ) }
                 val engine = remember(store) {
-                    ArabsHentaiBrowserEngine(applicationContext, store) { newState -> state = newState }
+                    ArabsHentaiBrowserEngine(applicationContext, store, { newState -> state = newState }, initial)
                 }
                 DisposableEffect(engine) {
                     onDispose { engine.dispose(); store.close() }
@@ -79,7 +85,7 @@ private fun ArabsCatalogScreen(
     onReadChapter: (String) -> Unit,
 ) {
     var search by remember(state.section) { mutableStateOf("") }
-    var showBrowser by remember { mutableStateOf(state.works.isEmpty()) }
+    var showBrowser by remember { mutableStateOf(state.works.isEmpty() || !state.progress.catalogDone) }
     var filterOrder by remember(state.section) { mutableStateOf("new_chapter") }
     var filterStatus by remember(state.section) { mutableStateOf("") }
     var filterGenre by remember(state.section) { mutableStateOf("") }
@@ -168,7 +174,7 @@ private fun ArabsCatalogScreen(
             }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Button(enabled = !state.syncing, onClick = { engine.startSync(); showBrowser = true }) {
-                    Text("مزامنة العناوين والفصول وجميع الصور")
+                    Text("استكمال فهرسة العناوين والفصول")
                 }
                 OutlinedButton(enabled = state.syncing, onClick = { engine.pause() }) { Text("إيقاف") }
                 OutlinedButton(onClick = { engine.refreshFromFirst(); showBrowser = true }) {
@@ -185,6 +191,7 @@ private fun ArabsCatalogScreen(
                 OutlinedButton(onClick = engine::refreshView) { Text("تحديث الصفحة") }
                 if (state.selectedWork != null) {
                     OutlinedButton(onClick = engine::backToCatalog) { Text("رجوع للفهرس") }
+                    OutlinedButton(onClick = engine::refreshSelectedWork) { Text("تحديث الفصول") }
                 }
             }
             // Keep WebView mounted even while showing the cached catalog: closing it

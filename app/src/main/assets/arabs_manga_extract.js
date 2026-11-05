@@ -43,8 +43,9 @@
 
   if (mode === "genres") {
     const names = [...document.querySelectorAll(
-      "#archive-content ul.genre-list li.item-genre .genre-data a"
-    )].map(a => text(a.textContent)).filter(Boolean);
+      "#archive-content ul.genre-list a, .genre-list a, .genres a, .tag-links a, " +
+      "a[href*='/genre/'], a[href*='genre%5B%5D'], a[href*='genre[]']"
+    )].map(a => text(a.textContent)).filter(name => name.length >= 2 && name.length <= 80);
     result.genres = [...new Set(names)].slice(0, 400);
   } else if (mode === "archive" || mode === "filter") {
     const cards = document.querySelectorAll(
@@ -69,7 +70,7 @@
       const title = text(card.querySelector(".data h3,.details .title,h3,h2,h4,.post-title,.manga-title,.title")?.textContent ||
         anchor.getAttribute("title") || card.querySelector("img")?.getAttribute("alt") || anchor.textContent).slice(0, 250);
       const cover = firstImageUrl(card) || firstImageUrl(anchor);
-      if (title.length < 2 || !cover) continue;
+      if (title.length < 2) continue;
       const categoryText = text(card.querySelector(".genres,.post-content_item,.manga-type,.type")?.textContent).toLowerCase();
       // The unfiltered /manga/ view is for manga; if the card advertises another
       // category, keep it out of that category's dedicated list.
@@ -104,6 +105,15 @@
     if (match) result.total = Math.max(result.total, Number(match[2]));
     candidatePages.sort((a, b) => a.page - b.page);
     result.next = candidatePages[0]?.url || "";
+    if (!result.next && result.total > result.current && result.current < 500) {
+      const next = new URL(here.href);
+      if (/\/page\/\d+\/?$/.test(next.pathname)) {
+        next.pathname = next.pathname.replace(/\/page\/\d+\/?$/, "/page/" + (result.current + 1) + "/");
+      } else {
+        next.searchParams.set("paged", String(result.current + 1));
+      }
+      result.next = next.href;
+    }
     if (result.total > 500) result.total = 500;
     // Scroll through lazy-loaded catalog cards without losing earlier results.
     const archiveKey = here.origin + here.pathname + here.search;
@@ -133,13 +143,19 @@
     result.incomplete = !archiveBottom && archiveScan.passes >= 360;
   } else if (mode === "detail") {
     const chapterNodes = document.querySelectorAll(
-      "#chapter-list a[href*='/manga/'], .oneshot-reader .image-item a[href], " +
-      ".wp-manga-chapter a[href], .listing-chapters_wrap a[href], .chapter-list a[href], " +
-      ".chapters a[href], .main.version-chap a[href], a[href*='chapter-'], a[href*='/chapter/']"
+      "#chapter-list a[href], #chapters a[href], .wp-manga-chapter a[href], " +
+      ".listing-chapters_wrap a[href], .chapter-list a[href], .chapters a[href], " +
+      ".main.version-chap a[href], .c-page__list a[href], .chapter-item a[href], " +
+      ".episodes a[href], .oneshot-reader .image-item a[href], " +
+      "a[href*='chapter-'], a[href*='/chapter/'], a[href*='/read/']"
     );
+    const rootPath = here.pathname.replace(/\/$/, "") + "/";
     for (const a of chapterNodes) {
       const url = sourceUrl(a.href);
       if (!url || seen.has(url) || url === here.href) continue;
+      const chapterPath = new URL(url).pathname;
+      const isExplicit = /(?:chapter|read|oneshot|\bch[-_]?\d+\b)/i.test(chapterPath);
+      if (!isExplicit && !chapterPath.startsWith(rootPath)) continue;
       const title = text(a.querySelector(".chapternum")?.textContent ||
         a.textContent || a.getAttribute("title") || a.parentElement?.textContent).slice(0, 220) ||
         "الفصل " + (result.chapters.length + 1);
@@ -147,8 +163,18 @@
       result.chapters.push({ url, title, position: result.chapters.length });
       if (result.chapters.length >= 2500) break;
     }
-    if (!result.chapters.length && document.querySelector(".oneshot-reader")) {
-      result.chapters.push({ url: here.href, title: "ونشوت", position: 0 });
+    if (!result.chapters.length && document.querySelector(
+      ".oneshot-reader img, .reading-content img, .chapter_image img, .page-break img"
+    )) {
+      result.chapters.push({ url: here.href, title: "عمل من فصل واحد", position: 0 });
+    }
+    // Some themes insert the chapter list asynchronously after verification.
+    // Wait for a short period before treating the listing as genuinely empty.
+    if (!result.chapters.length) {
+      const key = "details:" + here.href;
+      const attempts = (window.__qariDetailAttempts ||= {});
+      attempts[key] = (attempts[key] || 0) + 1;
+      result.pending = attempts[key] < 12;
     }
   } else if (mode === "chapter") {
     // Each page is a stable DOM snapshot; lazy-loaded images may appear only

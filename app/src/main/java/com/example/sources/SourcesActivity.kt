@@ -149,7 +149,19 @@ private fun SourcesScreen(
                         Button(onClick = {
                             context.startActivity(Intent(context, ArabsHentaiCatalogActivity::class.java))
                         }) {
-                            Text("فتح الفهرس العربي ومزامنة الأقسام")
+                            Text("فتح فهرس المانجا والمانهوا والتصنيفات")
+                        }
+                        ArabsSection.entries.chunked(2).forEach { sections ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                sections.forEach { section ->
+                                    OutlinedButton(onClick = {
+                                        context.startActivity(
+                                            Intent(context, ArabsHentaiCatalogActivity::class.java)
+                                                .putExtra("section", section.name)
+                                        )
+                                    }) { Text(section.title + " · فلاتر") }
+                                }
+                            }
                         }
                     }
                 }

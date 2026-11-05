@@ -21,6 +21,7 @@ class ArabsHentaiBrowserEngine(
     private val context: Context,
     private val store: ArabsHentaiStore,
     private val onChange: (UiState) -> Unit,
+    initialSection: ArabsSection = ArabsSection.MANGA,
 ) {
     data class UiState(
         val section: ArabsSection = ArabsSection.MANGA,
@@ -39,12 +40,16 @@ class ArabsHentaiBrowserEngine(
     private val handler = Handler(Looper.getMainLooper())
     private val script by lazy { context.assets.open("arabs_manga_extract.js").bufferedReader().use { it.readText() } }
     private var view: WebView? = null
-    private var section = ArabsSection.MANGA
+    private var section = initialSection
     private var mode = "archive"
     private var syncing = false
     private var selectedWork: ArabsWork? = null
     private var selectedChapter: ArabsChapter? = null
     private var bulkChapterSync = false
+    // Automatic details harvesting is silent: display the catalog, not each visited work.
+    private var indexingDetails = false
+    private var verifiedSession = false
+    private var lastAttemptedCategoryRedirect = ""
     private val failedBulkChapters = mutableSetOf<String>()
     private var status = "جاري تجهيز المصدر..."
     private var generation = 0
@@ -59,7 +64,9 @@ class ArabsHentaiBrowserEngine(
         section, status, syncing, if (activeFilter == null) store.list(section) else filteredWorks.values.toList(),
         selectedWork?.let { store.chapters(it.url) }.orEmpty(),
         selectedChapter?.let { store.pages(it.url) }.orEmpty(),
-        selectedWork, selectedChapter, store.progress(section), activeFilter != null, genreOptions,
+        if (indexingDetails || bulkChapterSync) null else selectedWork,
+        if (bulkChapterSync) null else selectedChapter,
+        store.progress(section), activeFilter != null, genreOptions,
     )
 
     private fun announce(text: String) { status = text; onChange(state()) }
@@ -82,12 +89,24 @@ class ArabsHentaiBrowserEngine(
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(webView: WebView, url: String) {
                     super.onPageFinished(webView, url)
+                    if (ArabsSection.safeUrl(url) == null) {
+                        pause(announce = false)
+                        announce("الموقع نقل الصفحة خارج نطاق المصدر؛ افتح الموقع وتأكد من الرابط.")
+                        return
+                    }
                     if (mode == "archive" && section.type != null) {
                         val fixed = section.adaptedArchiveUrl(url)
                         if (fixed != null && fixed != url) {
+                            if (fixed == lastAttemptedCategoryRedirect) {
+                                pause(announce = false)
+                                announce("الموقع أعاد توجيه القسم وحذف نوعه. افتح الرابط داخل المتصفح للتحقق.")
+                                return
+                            }
+                            lastAttemptedCategoryRedirect = fixed
                             load(fixed)
                             return
                         }
+                        lastAttemptedCategoryRedirect = ""
                     }
                     generation += 1
                     lastProcessed = ""
@@ -108,10 +127,11 @@ class ArabsHentaiBrowserEngine(
             view = this
             // Offline-first catalog: do not reopen a verified site on every launch
             // when this section already has stored titles and chapters.
-            if (store.list(section).isEmpty()) {
+            val previous = store.progress(section)
+            if (!previous.catalogDone) {
                 syncing = true
-                announce("أكمل التحقق في المتصفح؛ تبدأ الفهرسة تلقائيًا بعده.")
-                loadUrl(section.startUrl)
+                announce("بعد إكمال التحقق ستظهر العناوين بالتدريج داخل التطبيق.")
+                loadUrl(previous.nextUrl ?: section.startUrl)
             }
         }
     }
@@ -125,8 +145,13 @@ class ArabsHentaiBrowserEngine(
         mode = "archive"
         selectedWork = null
         selectedChapter = null
-        load(next.startUrl)
-        announce("${next.title}: ${store.progress(next).totalWorks} عنوان محفوظ")
+        indexingDetails = false
+        val checkpoint = store.progress(next)
+        if (!checkpoint.catalogDone) {
+            syncing = true
+            load(checkpoint.nextUrl ?: next.startUrl)
+        }
+        announce("${next.title}: ${checkpoint.totalWorks} عنوان محفوظ؛ يعرض الموجود أثناء استكمال القائمة")
     }
 
     fun startSync() {
@@ -138,14 +163,15 @@ class ArabsHentaiBrowserEngine(
         if (progress.catalogDone) {
             val pending = store.nextUnscannedWork(section)
             if (pending == null) {
-                startBulkChapters()
+                announce("العناوين والفصول المفهرسة محدثة؛ تُحمّل الصور عند فتح الفصل فقط.")
                 return
             }
             syncing = true
+            indexingDetails = true
             mode = "detail"
             selectedWork = pending
             selectedChapter = null
-            announce("جار جمع فصول ${pending.title}...")
+            announce("فهرس العناوين ظاهر؛ جار جلب الفصول المتاحة في الخلفية.")
             load(pending.url)
         } else {
             syncing = true
@@ -206,6 +232,7 @@ class ArabsHentaiBrowserEngine(
     fun pause(announce: Boolean = true) {
         syncing = false
         bulkChapterSync = false
+        indexingDetails = false
         callbacks.forEach(handler::removeCallbacks)
         callbacks.clear()
         if (announce) announce("تم الإيقاف؛ الفهرس والفصول والصور المحفوظة لم تُحذف.")
@@ -217,6 +244,7 @@ class ArabsHentaiBrowserEngine(
         selectedWork = work
         selectedChapter = null
         mode = "detail"
+        indexingDetails = false
         val alreadySaved = store.chapters(work.url).size
         if (alreadySaved > 0) {
             announce("${work.title}: $alreadySaved فصل محفوظ. لا حاجة لإعادة الاستيراد.")
@@ -224,6 +252,15 @@ class ArabsHentaiBrowserEngine(
             announce("${work.title} — جار جلب الفصول.")
             load(work.url)
         }
+    }
+
+    fun refreshSelectedWork() {
+        val work = selectedWork ?: return
+        pause(announce = false)
+        selectedWork = work
+        mode = "detail"
+        announce("جاري تحديث فصول ${work.title} داخل جلسة الموقع الحالية.")
+        load(work.url)
     }
 
     fun openChapter(chapter: ArabsChapter) {
@@ -289,13 +326,20 @@ class ArabsHentaiBrowserEngine(
                     if (ArabsSection.safeUrl(resolved) == null) return@evaluateJavascript
                     if (web.url != resolved) return@evaluateJavascript
                     if (snapshot.optBoolean("blocked", false)) {
-                        if (tries == 0) announce("أكمل تحقق الموقع مرة واحدة داخل الصفحة.")
+                        verifiedSession = false
+                        if (tries == 0) announce("أكمل التحقق داخل المتصفح، وسيُستأنف العرض في نفس الجلسة.")
                         if (tries < 180) scheduleExtract(web, requestedUrl, generation, tries + 1)
                         else {
                             pause(announce = false)
                             announce("انتهت مهلة التحقق. المحفوظات باقية؛ أعد تحميل الصفحة للاستئناف.")
                         }
                         return@evaluateJavascript
+                    }
+                    if (!verifiedSession) {
+                        verifiedSession = true
+                        // Persist cookies through normal WebView APIs after the visible verification.
+                        CookieManager.getInstance().flush()
+                        announce("تم فتح صفحة الموقع؛ جاري عرض العناوين والفصول المتاحة.")
                     }
                     if (modeAtRequest == "chapter") {
                         val chapter = selectedChapter
@@ -332,14 +376,32 @@ class ArabsHentaiBrowserEngine(
                             }
                         }
                     }
+                    // Publish partially rendered catalog cards immediately. Do not advance
+                    // page checkpoints until the DOM scan has actually completed.
                     if ((modeAtRequest == "archive" || modeAtRequest == "filter") &&
                         snapshot.optBoolean("pending", false)) {
+                        val interim = parseCards(snapshot.optJSONArray("items"))
+                        if (interim.isNotEmpty()) {
+                            if (modeAtRequest == "archive") {
+                                store.saveFilteredWorks(section, interim)
+                            } else {
+                                store.saveFilteredWorks(section, interim)
+                                interim.forEach { filteredWorks[it.url] = it }
+                            }
+                            if (tries % 4 == 0) announce(
+                                "${section.title}: ${if (modeAtRequest == "filter") filteredWorks.size else store.progress(section).totalWorks} عنوان ظاهر الآن؛ جار إكمال الصفحة"
+                            )
+                        }
                         if (tries < 360) {
                             scheduleExtract(web, requestedUrl, generation, tries + 1)
                         } else {
                             pause(announce = false)
                             announce("لم تكتمل هذه الصفحة؛ الصفحات السابقة محفوظة. حاول مجددًا.")
                         }
+                        return@evaluateJavascript
+                    }
+                    if (modeAtRequest == "detail" && snapshot.optBoolean("pending", false)) {
+                        if (tries < 16) scheduleExtract(web, requestedUrl, generation, tries + 1)
                         return@evaluateJavascript
                     }
                     if ((modeAtRequest == "archive" || modeAtRequest == "filter") &&
@@ -354,7 +416,7 @@ class ArabsHentaiBrowserEngine(
                         "detail" -> snapshot.optJSONArray("chapters")?.length() ?: 0
                         else -> snapshot.optJSONArray("pages")?.length() ?: 0
                     }
-                    if (count == 0 && tries < 35) {
+                    if (count == 0 && tries < (if (modeAtRequest == "detail") 16 else 35)) {
                         scheduleExtract(web, requestedUrl, generation, tries + 1)
                         return@evaluateJavascript
                     }
@@ -371,6 +433,24 @@ class ArabsHentaiBrowserEngine(
             mode == "chapter" || mode == "archive" || mode == "filter" -> 1250L
             else -> 2000L
         })
+    }
+
+    private fun parseCards(raw: JSONArray?): List<ArabsWork> = buildList {
+        val list = raw ?: return@buildList
+        for (i in 0 until minOf(list.length(), 500)) {
+            val item = list.optJSONObject(i) ?: continue
+            val address = item.optString("url")
+            val title = item.optString("title").trim()
+            if (ArabsSection.safeUrl(address) != null && title.length >= 2) {
+                add(ArabsWork(address, title, item.optString("cover")))
+            }
+        }
+    }
+
+    private fun sameWorkPage(actual: String, expected: String): Boolean {
+        val a = ArabsSection.safeUrl(actual) ?: return false
+        val b = ArabsSection.safeUrl(expected) ?: return false
+        return a.path.orEmpty().trimEnd('/') == b.path.orEmpty().trimEnd('/')
     }
 
     private fun urlMatchesChapter(page: String, chapter: String): Boolean {
@@ -398,17 +478,7 @@ class ArabsHentaiBrowserEngine(
             "archive", "filter" -> {
                 if (currentMode == "archive" && section.archiveUrl(url) == null) return
                 if (currentMode == "filter" && activeFilter?.nextPage(section, url) == null) return
-                val json = response.optJSONArray("items") ?: JSONArray()
-                val cards = buildList {
-                    for (i in 0 until minOf(json.length(), 160)) {
-                        val item = json.optJSONObject(i) ?: continue
-                        val link = item.optString("url")
-                        if (ArabsSection.safeUrl(link) == null) continue
-                        val title = item.optString("title").trim()
-                        if (title.length < 2) continue
-                        add(ArabsWork(link, title, item.optString("cover")))
-                    }
-                }
+                val cards = parseCards(response.optJSONArray("items"))
                 if (cards.isEmpty()) {
                     announce("الصفحة لا تحتوي بطاقات قابلة للاستخراج. تحقق من عرض الموقع أولًا.")
                     pause(announce = false)
@@ -454,7 +524,7 @@ class ArabsHentaiBrowserEngine(
             }
             "detail" -> {
                 val work = selectedWork ?: return
-                if (url != work.url) return
+                if (!sameWorkPage(url, work.url)) return
                 val json = response.optJSONArray("chapters") ?: JSONArray()
                 val entries = buildList {
                     for (i in 0 until minOf(json.length(), 2500)) {
@@ -473,10 +543,10 @@ class ArabsHentaiBrowserEngine(
                             announce("تعذّر استخراج فصول ${work.title}؛ انتقلت للعنوان التالي.")
                             delayedLoad(next.url)
                         } else {
-                            startBulkChapters()
+                            finishDetailsIndex()
                         }
                     } else {
-                        announce("لم تظهر روابط فصول هذا العنوان. افتح الصفحة وتحقق من تحميلها.")
+                        announce("لم يُعثر على فصول قابلة للاستخراج. افتح صفحة العمل داخل المتصفح لتشخيصه.")
                     }
                     return
                 }
@@ -489,7 +559,7 @@ class ArabsHentaiBrowserEngine(
                         selectedWork = next
                         delayedLoad(next.url)
                     } else {
-                        startBulkChapters()
+                        finishDetailsIndex()
                     }
                 }
             }
@@ -563,14 +633,25 @@ class ArabsHentaiBrowserEngine(
         delayedLoad(store.chapterRemaining(next.url) ?: next.url)
     }
 
+    private fun finishDetailsIndex() {
+        syncing = false
+        indexingDetails = false
+        mode = "archive"
+        selectedWork = null
+        selectedChapter = null
+        announce("ظهرت جميع العناوين التي أمكن فهرستها، وتم حفظ قوائم فصولها المتاحة. اختر أي عمل لقراءته.")
+    }
+
     private fun startDetailsAfterArchive() {
         val next = store.nextUnscannedWork(section)
         if (next == null) {
-            startBulkChapters()
+            finishDetailsIndex()
             return
         }
+        indexingDetails = true
         mode = "detail"
         selectedWork = next
+        announce("العناوين معروضة؛ جار استكمال فهرسة قوائم الفصول تدريجيًا.")
         delayedLoad(next.url)
     }
 
