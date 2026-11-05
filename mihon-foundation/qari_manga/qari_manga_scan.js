@@ -34,17 +34,17 @@
       const target = decodeURIComponent(link.pathname).toLowerCase();
       if (target === '/manga/' || target.startsWith('/manga/page/') ||
           /\/page\/[0-9]+\/?$/.test(target) || /\/category\//.test(target)) continue;
-      const card = a.closest('article,.item,.post,.manga,.card,.poster,.manga-item') || a;
+      const card = a.closest('article,.page-item-detail,.c-tabs-item__content,.item,.post,.manga,.card,.poster,.manga-item') || a;
       const cover = imageOf(card) || imageOf(a);
       if (!cover) continue;
-      const name = norm(card.querySelector('h2,h3,.title,.name,.entry-title')?.textContent ||
+      const name = norm(card.querySelector('h2,h3,.title,.name,.entry-title,.post-title')?.textContent ||
         a.title || a.querySelector('img')?.alt || a.textContent || '');
       if (name.length < 2 || name.length > 250) continue;
       link.hash = '';
       result.set(link.href,{url:link.href,title:name,cover});
       if (result.size >= 120) break;
     }
-    let current = Number(path.match(/\/page\/(\d+)/)?.[1] || here.searchParams.get('paged') || 1);
+    let current = Number(path.match(/\/page\/(\d+)/)?.[1] || here.searchParams.get('paged') || here.searchParams.get('page') || 1);
     let total = current, nextUrl = '';
     const nav = candidates('a[href]');
     const upcoming = [];
@@ -53,17 +53,24 @@
       if (!allowed(link)) continue;
       const p = decodeURIComponent(link.pathname).toLowerCase();
       if (p !== '/manga/' && !/^\/manga\/page\/\d+\/?$/.test(p)) continue;
-      const n = Number(p.match(/\/page\/(\d+)/)?.[1] || link.searchParams.get('paged') || 1);
+      const n = Number(p.match(/\/page\/(\d+)/)?.[1] || link.searchParams.get('paged') || link.searchParams.get('page') || 1);
       const label = Number(norm(anchor.textContent));
       if (Number.isFinite(label) && label > 0) total = Math.max(total,label);
-      if (n > current && n < 5000) upcoming.push({n,url:link.href});
+      if (n > current && n < 5000) {
+        // Preserve the site category when a pagination link omits the type.
+        if (rawType && !link.searchParams.has('type')) link.searchParams.set('type',rawType);
+        if (rawType && link.searchParams.get('type') !== rawType) continue;
+        upcoming.push({n,url:link.href});
+      }
     }
     const text = document.body.innerText.match(/(?:page|صفحة)\s*[0-9]+\s*(?:of|من)\s*([0-9]+)/i);
     if (text) total = Math.max(total,Number(text[1]));
     upcoming.sort((a,b) => a.n - b.n);
     nextUrl = upcoming[0]?.url || '';
+    const scroller = document.scrollingElement || document.documentElement;
+    const atBottom = scroller.scrollTop + innerHeight >= scroller.scrollHeight - 60;
     return JSON.stringify({kind:'archive',url:root,section:rawType,items:[...result.values()],
-      current,total,nextUrl});
+      current,total,nextUrl,atBottom});
   }
   // Chapters are recognized from visible chapter-like links, not guessed.
   const titleUrl = path;

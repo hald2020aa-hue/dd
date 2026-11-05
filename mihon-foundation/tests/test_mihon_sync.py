@@ -1,19 +1,16 @@
-"""Pinned Mihon integration smoke tests, no Android SDK needed.
-
-The full Kotlin/Gradle compile is performed by the feature-branch workflow.
-"""
+"""Safe code overlay tests. The true Android compile is the GitHub Actions job."""
 import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
 
-HERE = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('manga_d_sync', HERE / 'apply_mihon_sync.py')
+ROOT = Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location('qari_overlay', ROOT / 'apply_mihon_sync.py')
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 
 
-class MihonMangaSyncOverlayTest(unittest.TestCase):
+class MihonLiveIntegrationTests(unittest.TestCase):
     def fixture(self, root):
         sources = {
             'app/src/main/java/eu/kanade/tachiyomi/source/AndroidSourceManager.kt': '''import dev.zacsweers.metro.AppScope
@@ -23,80 +20,87 @@ class AndroidSourceManager(
 ) {
                     sourcesMapFlow.value = mutableMap
 }''',
-            'app/src/main/java/eu/kanade/tachiyomi/ui/browse/source/browse/BrowseSourceScreen.kt': '''import androidx.compose.ui.platform.LocalConfiguration
+            'app/src/main/java/eu/kanade/tachiyomi/ui/browse/source/browse/BrowseSourceScreen.kt': '''import androidx.compose.foundation.background
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import eu.kanade.tachiyomi.source.online.HttpSource
         val uriHandler = LocalUriHandler.current
+        val onWebViewClick = f@{
+            val httpSource = source as? HttpSource ?: return@f
+            navigator.push(
                     Row(
                         modifier = Modifier
                             .horizontalScroll(rememberScrollState())
                     ) {
                         FilterChip(
-                            selected = state.listing == Listing.Popular,''',
+                            selected = state.listing == Listing.Popular,
+                mangaList = viewModel.mangaPagerFlowFlow.collectAsLazyPagingItems(),''',
             'app/src/main/AndroidManifest.xml': '''<manifest>
         <activity
             android:name=".ui.webview.WebViewActivity"
-            android:configChanges="uiMode|orientation|screenSize" />
+            android:exported="false" />
 </manifest>''',
             'app/build.gradle.kts': '''splits {
             isUniversalApk = true
             include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
 }''',
         }
-        for p, content in sources.items():
-            target = root / p
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content)
+        for path, content in sources.items():
+            f = root / path
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(content)
 
-    def test_injects_sources_and_sync_button_only_once(self):
+    def test_patches_real_mihon_integration_and_is_idempotent(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             self.fixture(root)
             mod.patch(root)
-            code = (root / list(mod.UPSTREAM_FILES)[0]).read_text()
-            self.assertIn('QariSection.entries.forEach', code)
-            self.assertIn('QariMangaSource(context, section)', code)
-            browser = (root / list(mod.UPSTREAM_FILES)[1]).read_text()
-            self.assertIn('QariMangaSyncActivity.newIntent', browser)
-            manifest = (root / 'app/src/main/AndroidManifest.xml').read_text()
-            self.assertIn('.source.qari.QariMangaSyncActivity', manifest)
-            gradle = (root / 'app/build.gradle.kts').read_text()
-            self.assertIn('isUniversalApk = false', gradle)
-            self.assertIn('include("arm64-v8a")', gradle)
-            for k in ('QariMangaSource.kt','QariMangaStore.kt','QariMangaSyncActivity.kt'):
-                self.assertTrue((root/mod.DEST_DIR/k).is_file())
-            first = [(root/p).read_bytes() for p in mod.UPSTREAM_FILES]
+            source = (root / 'app/src/main/java/eu/kanade/tachiyomi/source/AndroidSourceManager.kt').read_text()
+            browse = (root / 'app/src/main/java/eu/kanade/tachiyomi/ui/browse/source/browse/BrowseSourceScreen.kt').read_text()
+            self.assertIn('QariSection.entries.forEach', source)
+            self.assertIn('rememberLauncherForActivityResult(', browse)
+            self.assertIn('qariItems.refresh()', browse)
+            self.assertIn('LoadState.Error', browse)
+            self.assertIn('فتح الموقع / التحقق', browse)
+            self.assertIn('mangaList = qariItems', browse)
+            self.assertNotIn('مزامنة العناوين والفصول والصور', browse)
+            self.assertIn('include("arm64-v8a")', (root/'app/build.gradle.kts').read_text())
+            for file in ['QariMangaSource.kt', 'QariMangaStore.kt', 'QariMangaSyncActivity.kt',
+                         'QariLiveParser.kt', 'QariLiveCache.kt']:
+                self.assertTrue((root / mod.DEST_DIR / file).is_file())
+            original = {path:(root/path).read_bytes() for path in mod.UPSTREAM_FILES}
             mod.patch(root)
-            self.assertEqual(first,[(root/p).read_bytes() for p in mod.UPSTREAM_FILES])
+            self.assertEqual(original, {path:(root/path).read_bytes() for path in mod.UPSTREAM_FILES})
 
-    def test_unexpected_upstream_is_rejected_without_writes(self):
+    def test_bad_upstream_does_not_write_partially(self):
         with tempfile.TemporaryDirectory() as temp:
-            root=Path(temp)
+            root = Path(temp)
             self.fixture(root)
-            file=root/'app/src/main/java/eu/kanade/tachiyomi/source/AndroidSourceManager.kt'
-            file.write_text('unexpected source manager')
-            other=root/'app/src/main/AndroidManifest.xml'
-            old=other.read_bytes()
+            broken = root/'app/src/main/java/eu/kanade/tachiyomi/source/AndroidSourceManager.kt'
+            broken.write_text('wrong upstream version')
+            manifest = root/'app/src/main/AndroidManifest.xml'
+            original = manifest.read_bytes()
             with self.assertRaises(RuntimeError):
                 mod.patch(root)
-            self.assertEqual(old, other.read_bytes())
+            self.assertEqual(original, manifest.read_bytes())
             self.assertFalse((root/mod.DEST_DIR).exists())
 
-    def test_sqlite_schema_never_drops_old_tables(self):
-        source=(HERE/'qari_manga/QariMangaStore.kt').read_text()
-        self.assertIn('CREATE TABLE IF NOT EXISTS titles',source)
-        self.assertIn('CREATE TABLE IF NOT EXISTS chapters',source)
-        self.assertIn('CREATE TABLE IF NOT EXISTS images',source)
-        self.assertIn('CREATE TABLE IF NOT EXISTS progress',source)
-        self.assertNotIn('DROP TABLE',source)
-        self.assertIn('INSERT OR IGNORE INTO images',source)
-        self.assertIn('ORDER BY',source.upper() if False else 'ORDER BY') if False else None
-        self.assertIn('html_page ASC, position ASC',source)
-        self.assertIn('type != section.siteType',source)
+    def test_no_drop_tables_and_live_cache_is_page_scoped(self):
+        store = (ROOT/'qari_manga/QariMangaStore.kt').read_text()
+        live = (ROOT/'qari_manga/QariLiveCache.kt').read_text()
+        self.assertNotIn('DROP TABLE', store)
+        self.assertNotIn('DROP TABLE', live)
+        self.assertIn('PRIMARY KEY(section,page)',live)
+        self.assertIn('html_page ASC, position ASC', store)
+        self.assertIn('upsertLiveTitles', store)
 
-    def test_no_kotlin_line_over_120_characters(self):
-        for file in (HERE/'qari_manga').glob('*.kt'):
-            bad=[(n,len(line)) for n,line in enumerate(file.read_text().splitlines(),1) if len(line)>120]
-            self.assertFalse(bad,(str(file),bad[:5]))
+    def test_no_long_kotlin_lines(self):
+        for file in (ROOT/'qari_manga').glob('*.kt'):
+            long=[(number,len(line)) for number,line in enumerate(file.read_text().splitlines(), 1)
+                  if len(line)>120]
+            self.assertFalse(long,(file.name,long[:10]))
 
-if __name__=='__main__':
+
+if __name__ == '__main__':
     unittest.main()

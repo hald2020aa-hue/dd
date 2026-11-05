@@ -298,6 +298,33 @@ class QariMangaStore(context: Context) : SQLiteOpenHelper(
         return count
     }
 
+    /** Live browsing writes only the cards requested, without changing old sync checkpoints. */
+    @Synchronized
+    fun upsertLiveTitles(section: QariSection, cards: JSONArray) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            for (i in 0 until minOf(cards.length(), 250)) {
+                val obj = cards.optJSONObject(i) ?: continue
+                val url = QariUrls.canonical(obj.optString("url")) ?: continue
+                val title = obj.optString("title").trim().take(250)
+                if (title.length < 2) continue
+                val cover = obj.optString("cover").takeIf { it.startsWith("https://") }
+                db.execSQL(
+                    "INSERT OR IGNORE INTO titles(section,url,title,cover) VALUES(?,?,?,?)",
+                    arrayOf<Any?>(section.key, url, title, cover),
+                )
+                db.execSQL(
+                    "UPDATE titles SET title=?,cover=COALESCE(?,cover) WHERE section=? AND url=?",
+                    arrayOf<Any?>(title, cover, section.key, url),
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     @Synchronized
     fun nextUnscannedTitle(section: QariSection): String? = firstUnscanned(
         "titles", "url", "section=? AND scanned=0", section.key,

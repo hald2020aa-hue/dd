@@ -7,8 +7,10 @@ import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.webkit.CookieManager
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
@@ -17,275 +19,217 @@ import android.widget.TextView
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** In-app, visible, resumable sync using pages legitimately opened in WebView. */
+/** Visible verification fallback. Imports the ONE requested catalog page, not the whole site. */
 class QariMangaSyncActivity : Activity() {
     private lateinit var section: QariSection
     private lateinit var store: QariMangaStore
+    private lateinit var cache: QariLiveCache
     private lateinit var web: WebView
     private lateinit var status: TextView
-    private val handler = Handler(Looper.getMainLooper())
-    private val scheduled = mutableListOf<Runnable>()
-    private var enabled = false
-    private var phase = "archive"
-    private var chapterUrl = ""
-    private var htmlPage = 0
-    private var pageRounds = 0
-    private var bottomRounds = 0
-    private var expected = ""
     private lateinit var extractor: String
+    private val handler = Handler(Looper.getMainLooper())
+    private val jobs = mutableListOf<Runnable>()
+    private var page = 1
+    private var enabled = false
+    private var scanning = false
+    private var rounds = 0
+    private var challenges = 0
+    private var bottomRounds = 0
+    private var lastCount = -1
+    private val cards = linkedMapOf<String, JSONObject>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         section = QariSection.from(intent.getStringExtra(EXTRA_SECTION))
+        page = intent.getIntExtra(EXTRA_PAGE, 1).coerceIn(1, 5000)
         store = QariMangaStore(this)
+        cache = QariLiveCache(this)
         extractor = assets.open("qari_manga_scan.js").bufferedReader().use { it.readText() }
 
-        val column = LinearLayout(this).apply {
+        val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(21, 22, 27))
+            setBackgroundColor(Color.rgb(20, 21, 26))
         }
         status = TextView(this).apply {
             setTextColor(Color.WHITE)
-            textSize = 13f
-            setPadding(16, 14, 16, 14)
-            text = "${section.title}: افتح الموقع بصورة طبيعية ثم اضغط مزامنة"
+            textSize = 14f
+            setPadding(20, 16, 20, 16)
+            text = "${section.title}: الصفحة $page — إن ظهر التحقق أكمله ثم سيظهر المحتوى تلقائيًا"
         }
-        column.addView(status)
-        val controls = LinearLayout(this)
-        fun control(label: String, onClick: () -> Unit) {
-            controls.addView(Button(this).apply {
+        root.addView(status)
+        val buttons = LinearLayout(this)
+        fun button(label: String, action: () -> Unit) {
+            buttons.addView(Button(this).apply {
                 text = label
                 textSize = 11f
-                setOnClickListener { onClick() }
+                setOnClickListener { action() }
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         }
-        control("مزامنة") { start(fresh = false) }
-        control("تحديث من الأول") { start(fresh = true) }
-        control("إيقاف") { pause("تم الإيقاف، البيانات والتقدم محفوظان") }
-        control("إغلاق") { finish() }
-        column.addView(controls)
+        button("إعادة المحاولة") { visit() }
+        button("عرض المحفوظ") { finish() }
+        button("إغلاق") { finish() }
+        root.addView(buttons)
+        CookieManager.getInstance().setAcceptCookie(true)
         web = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.loadsImagesAutomatically = true
             settings.javaScriptCanOpenWindowsAutomatically = false
+            settings.userAgentString = WebSettings.getDefaultUserAgent(this@QariMangaSyncActivity)
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView, url: String) {
-                    if (enabled) {
-                        schedule(1600L) { scan() }
-                    } else if (!QariUrls.isSite(url)) {
-                        message("خارج موقع المصدر؛ ارجع إلى الموقع قبل المزامنة")
-                    }
+                    if (enabled) schedule(900) { scan() }
                 }
                 override fun onReceivedError(
                     view: WebView,
                     request: WebResourceRequest,
                     error: WebResourceError,
                 ) {
-                    if (request.isForMainFrame) pause("تعذّر فتح الصفحة: ${error.description}")
+                    if (request.isForMainFrame) {
+                        message("فشل التحميل: ${error.description}. اضغط إعادة المحاولة")
+                    }
                 }
             }
         }
-        column.addView(web, LinearLayout.LayoutParams(-1, 0, 1f))
-        setContentView(column)
-        web.loadUrl(section.archive())
+        root.addView(web, LinearLayout.LayoutParams(-1, 0, 1f))
+        setContentView(root)
+        visit()
     }
 
     private fun message(value: String) { status.text = value }
 
-    private fun schedule(delay: Long, action: () -> Unit) {
-        val job = Runnable(action)
-        scheduled += job
-        handler.postDelayed(job, delay)
-    }
-
-    private fun clearJobs() {
-        scheduled.forEach(handler::removeCallbacks)
-        scheduled.clear()
-    }
-
-    private fun pause(text: String) {
-        enabled = false
-        clearJobs()
-        message(text)
-    }
-
-    private fun start(fresh: Boolean) {
-        if (enabled) return
-        if (fresh) {
-            store.saveProgress(section, QariMangaStore.Progress("archive", section.archive(), emptySet(), 0))
+    private fun schedule(ms: Long, block: () -> Unit) {
+        val job = object : Runnable {
+            override fun run() {
+                jobs.remove(this)
+                block()
+            }
         }
-        val p = store.progress(section)
-        phase = if (p.phase == "done") "archive" else p.phase
-        if (p.phase == "done") {
-            store.saveProgress(section, QariMangaStore.Progress("archive", section.archive(), emptySet(), 0))
-        }
+        jobs += job
+        handler.postDelayed(job, ms)
+    }
+
+    private fun cancelJobs() {
+        jobs.forEach(handler::removeCallbacks)
+        jobs.clear()
+    }
+
+    private fun visit() {
+        cancelJobs()
         enabled = true
-        val url = when (phase) {
-            "archive" -> p.nextUrl.takeIf { QariUrls.archivePage(it, section) != null } ?: section.archive()
-            "details" -> store.nextUnscannedTitle(section)
-            "chapters" -> store.nextUnscannedChapter(section)
-            else -> null
-        }
-        if (url == null) {
-            finishSync()
-        } else {
-            visit(url)
-        }
-    }
-
-    private fun visit(url: String) {
-        if (!enabled) return
-        clearJobs()
-        if (!QariUrls.isSite(url)) {
-            pause("توقفت المزامنة: رابط خارج الموقع")
-            return
-        }
-        expected = QariUrls.canonical(url).orEmpty()
-        pageRounds = 0
+        scanning = false
+        rounds = 0
+        challenges = 0
         bottomRounds = 0
-        message("${section.title}: $phase • ${QariUrls.relative(url)}")
+        lastCount = -1
+        cards.clear()
+        val url = QariLiveParser.archiveUrl(section, page)
+        message("فتح ${section.title} — صفحة $page. سيبدأ العرض بعد التحقق")
         web.loadUrl(url)
+        schedule(2500) { scan() }
     }
 
     private fun scan() {
-        if (!enabled || pageRounds >= 65) {
-            if (enabled) pause("توقفت لتجنب حلقة لا تنتهي. المحفوظات باقية؛ استأنف لاحقًا")
+        if (!enabled || scanning || isFinishing || isDestroyed) return
+        if (++rounds > 65) {
+            message("تعذر إكمال قراءة الصفحة. تستطيع عرض المحفوظ أو إعادة المحاولة")
+            enabled = false
             return
         }
-        pageRounds++
+        scanning = true
         web.evaluateJavascript(extractor) { raw ->
-            if (!enabled) return@evaluateJavascript
+            scanning = false
+            if (!enabled || isFinishing || isDestroyed) return@evaluateJavascript
             try {
-                // Android wraps a returned JavaScript string in JSON quotes.
                 val decoded = JSONArray("[$raw]").getString(0)
                 val result = JSONObject(decoded)
-                val url = result.optString("url")
-                if (QariUrls.canonical(url) != expected) {
-                    if (QariUrls.isSite(url)) pause("انتقلت الصفحة؛ راجع الرابط ثم استأنف")
-                    return@evaluateJavascript
-                }
                 if (result.optString("kind") == "challenge") {
-                    message("أكمل تحقق الموقع يدويًا؛ سيتم الاستمرار بعد فتح الصفحة")
-                    schedule(3000L) { scan() }
+                    rounds = 0
+                    challenges++
+                    if (challenges <= 180) {
+                        message("أكمل تحقق الموقع، ثم يبدأ عرض الصفحة $page تلقائيًا")
+                        schedule(3000) { scan() }
+                    } else {
+                        message("التحقق لم يكتمل. تستطيع إعادة المحاولة")
+                        enabled = false
+                    }
                     return@evaluateJavascript
                 }
-                when (phase) {
-                    "archive" -> onArchive(url, result)
-                    "details" -> onDetails(url, result)
-                    "chapters" -> onChapter(url, result)
+                val current = result.optString("url")
+                if (!sameSectionPage(current) || result.optString("kind") != "archive") {
+                    message("الموقع غيّر القسم أو لم يعرض الأرشيف. افتح رابط القسم الصحيح")
+                    enabled = false
+                    return@evaluateJavascript
+                }
+                val items = result.optJSONArray("items") ?: JSONArray()
+                for (i in 0 until items.length()) {
+                    val item = items.optJSONObject(i) ?: continue
+                    val key = QariUrls.canonical(item.optString("url")) ?: continue
+                    if (item.optString("title").isNotBlank()) cards[key] = item
+                }
+                if (cards.isNotEmpty()) {
+                    val collected = JSONArray()
+                    cards.values.forEach { collected.put(it) }
+                    val hasNext = result.optString("nextUrl").isNotBlank() ||
+                        result.optInt("total", 1) > page
+                    cache.merge(section, page, collected, hasNext)
+                    store.upsertLiveTitles(section, collected)
+                    message("ظهرت ${cards.size} عنوانًا — ${section.title}، صفحة $page")
+                }
+                val atBottom = result.optBoolean("atBottom", false)
+                bottomRounds = if (atBottom && cards.size == lastCount) bottomRounds + 1 else 0
+                lastCount = cards.size
+                if (cards.isNotEmpty() && bottomRounds >= 2) {
+                    CookieManager.getInstance().flush()
+                    enabled = false
+                    cancelJobs()
+                    setResult(RESULT_OK)
+                    finish()
+                } else if (rounds < 65) {
+                    web.evaluateJavascript("window.scrollBy(0, Math.max(400, innerHeight * 0.75))", null)
+                    schedule(950) { scan() }
+                } else {
+                    message("توقّف الفحص لحماية التطبيق. العناوين التي ظهرت محفوظة")
+                    enabled = false
                 }
             } catch (e: Exception) {
-                pause("لم يمكن قراءة محتوى الصفحة: ${e.message}")
+                message("تعذر قراءة الصفحة: ${e.message}")
+                enabled = false
             }
         }
     }
 
-    private fun onArchive(url: String, data: JSONObject) {
-        val items = data.optJSONArray("items") ?: JSONArray()
-        if (data.optString("kind") != "archive" || items.length() == 0) {
-            if (pageRounds < 8) schedule(1800L) { scan() }
-            else pause("لم تظهر بطاقات مانجا بعد التحقق. لا يوجد ما يمكن استيراده")
-            return
+    private fun sameSectionPage(url: String): Boolean {
+        val parsed = QariUrls.archivePage(url, section) ?: return false
+        val uri = android.net.Uri.parse(parsed)
+        val path = Regex("/manga/page/(\\d+)").find(uri.path.orEmpty())
+            ?.groupValues?.get(1)?.toIntOrNull()
+        val currentPage = path ?: uri.getQueryParameter("paged")?.toIntOrNull()
+            ?: uri.getQueryParameter("page")?.toIntOrNull() ?: 1
+        // A missing 'type' after a redirect is NOT considered verified for a filtered shelf.
+        if (section.siteType != null && uri.getQueryParameter("type") != section.siteType) {
+            // archivePage may normalize missing 'type', so check the actual URL too.
+            if (android.net.Uri.parse(url).getQueryParameter("type") != section.siteType) return false
         }
-        val pageUrl = QariUrls.archivePage(url, section) ?: run {
-            pause("رابط الترقيم لا يطابق تصنيف القسم")
-            return
-        }
-        val total = data.optInt("total", 0)
-        val count = store.importListing(section, items, pageUrl, data.optString("nextUrl"), total)
-        val p = store.progress(section)
-        message("حُفظ $count عنوانًا، الصفحات ${p.visited.size}/${p.total} — ${section.title}")
-        when (p.phase) {
-            "archive" -> {
-                if (p.nextUrl == url || p.nextUrl == expected) {
-                    pause("هناك صفحات أخرى لكن الموقع لم يُظهر رابط الصفحة التالية. البيانات محفوظة")
-                } else {
-                    schedule(1300L) { visit(p.nextUrl) }
-                }
-            }
-            else -> {
-                phase = "details"
-                schedule(800L) { nextTitle() }
-            }
-        }
-    }
-
-    private fun nextTitle() {
-        if (!enabled) return
-        val next = store.nextUnscannedTitle(section)
-        if (next != null) visit(next) else {
-            phase = "chapters"
-            store.saveProgress(section, store.progress(section).copy(phase = "chapters", nextUrl = ""))
-            nextChapter()
-        }
-    }
-
-    private fun onDetails(url: String, data: JSONObject) {
-        val chapters = data.optJSONArray("chapters") ?: JSONArray()
-        if (chapters.length() == 0) {
-            if (pageRounds < 7) schedule(1600L) { scan() }
-            else pause("لم يظهر فهرس فصول لهذا العنوان؛ لم أعلّمه كمكتمل")
-            return
-        }
-        val count = store.importDetails(section, url, data.optString("description"), chapters)
-        message("حُفظ $count فصلًا من ${QariUrls.relative(url)}")
-        schedule(1000L) { nextTitle() }
-    }
-
-    private fun nextChapter() {
-        if (!enabled) return
-        val next = store.nextUnscannedChapter(section)
-        if (next == null) finishSync() else {
-            chapterUrl = next
-            htmlPage = 0
-            visit(next)
-        }
-    }
-
-    private fun onChapter(url: String, data: JSONObject) {
-        val imgs = data.optJSONArray("images") ?: JSONArray()
-        if (imgs.length() > 0) {
-            store.importImages(section, chapterUrl, htmlPage, imgs)
-        }
-        val atBottom = data.optBoolean("atBottom", false)
-        bottomRounds = if (atBottom) bottomRounds + 1 else 0
-        if (bottomRounds >= 3 && imgs.length() > 0) {
-            val nextHtml = data.optString("nextHtml").takeIf { it.isNotBlank() && QariUrls.isSite(it) }
-            if (nextHtml != null && QariUrls.canonical(nextHtml) != expected) {
-                htmlPage++
-                schedule(900L) { visit(nextHtml) }
-            } else {
-                store.markChapterScanned(section, chapterUrl)
-                message("حُفظت صور الفصل: ${store.pages(section, chapterUrl).size}")
-                schedule(1000L) { nextChapter() }
-            }
-        } else {
-            // Lazy images must be discovered as the reader scrolls.
-            web.evaluateJavascript("window.scrollBy(0, Math.max(480, innerHeight * 0.8))", null)
-            schedule(1350L) { scan() }
-        }
-    }
-
-    private fun finishSync() {
-        enabled = false
-        clearJobs()
-        store.saveProgress(section, store.progress(section).copy(phase = "done", nextUrl = ""))
-        message("اكتملت مزامنة ${section.title}. ارجع إلى قائمة المصدر وحدّثها")
+        return QariUrls.isSite(url) && currentPage == page
     }
 
     override fun onDestroy() {
         enabled = false
-        clearJobs()
+        cancelJobs()
         web.stopLoading()
         web.destroy()
         store.close()
+        cache.close()
         super.onDestroy()
     }
 
     companion object {
         private const val EXTRA_SECTION = "qari_section"
-        fun newIntent(context: Context, section: QariSection): Intent =
-            Intent(context, QariMangaSyncActivity::class.java).putExtra(EXTRA_SECTION, section.key)
+        private const val EXTRA_PAGE = "qari_page"
+        fun newIntent(context: Context, section: QariSection, page: Int = 1): Intent =
+            Intent(context, QariMangaSyncActivity::class.java)
+                .putExtra(EXTRA_SECTION, section.key)
+                .putExtra(EXTRA_PAGE, page)
     }
 }
