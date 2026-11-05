@@ -8,7 +8,7 @@
 
   const here = new URL(location.href);
   const host = here.hostname.toLowerCase().replace(/^www\./, "");
-  const result = { mode, url: here.href, items: [], chapters: [], pages: [], next: "", current: 1, total: 0, blocked: false };
+  const result = { mode, url: here.href, items: [], chapters: [], pages: [], genres: [], next: "", current: 1, total: 0, blocked: false };
   if (host !== "arabshentai.com" || here.protocol !== "https:") return JSON.stringify(result);
   const text = value => (value || "").replace(/\s+/g, " ").trim();
   const absolute = raw => { try { return new URL(raw, here.href); } catch { return null; } };
@@ -41,8 +41,14 @@
   };
   const seen = new Set();
 
-  if (mode === "archive") {
+  if (mode === "genres") {
+    const names = [...document.querySelectorAll(
+      "#archive-content ul.genre-list li.item-genre .genre-data a"
+    )].map(a => text(a.textContent)).filter(Boolean);
+    result.genres = [...new Set(names)].slice(0, 400);
+  } else if (mode === "archive" || mode === "filter") {
     const cards = document.querySelectorAll(
+      "#archive-content .wp-manga, .search-page .result-item article, " +
       ".page-item-detail, .c-tabs-item__content, .manga-item, .manga-card, " +
       ".post-on, .page-item, .item-thumb, .manga-list .item, .main-col article, article"
     );
@@ -53,21 +59,21 @@
     }
     for (const card of elements) {
       const anchor = card.matches?.("a[href]") ? card :
-        card.querySelector("a[href][title], h3 a[href], h2 a[href], .post-title a[href], a[href]");
+        card.querySelector(".data h3 a[href], .details .title a[href], a[href][title], h3 a[href], h2 a[href], .post-title a[href], a[href]");
       if (!anchor) continue;
       const url = sourceUrl(anchor.href);
       if (!url || seen.has(url)) continue;
       const u = new URL(url);
       if (/\/manga\/?$/.test(u.pathname) || /\/manga\/page\/\d+/.test(u.pathname) ||
           /\/category\/|\/tag\/|\/login\/|\/register\//i.test(u.pathname)) continue;
-      const title = text(card.querySelector("h3,h2,h4,.post-title,.manga-title,.title")?.textContent ||
+      const title = text(card.querySelector(".data h3,.details .title,h3,h2,h4,.post-title,.manga-title,.title")?.textContent ||
         anchor.getAttribute("title") || card.querySelector("img")?.getAttribute("alt") || anchor.textContent).slice(0, 250);
       const cover = firstImageUrl(card) || firstImageUrl(anchor);
       if (title.length < 2 || !cover) continue;
       const categoryText = text(card.querySelector(".genres,.post-content_item,.manga-type,.type")?.textContent).toLowerCase();
       // The unfiltered /manga/ view is for manga; if the card advertises another
       // category, keep it out of that category's dedicated list.
-      if (!here.searchParams.get("type") && /manhwa|manhua|doujinshi|comic|مانهوا|دوجينشي|كوميكس/.test(categoryText)) continue;
+      if (mode === "archive" && !here.searchParams.get("type") && /manhwa|manhua|doujinshi|comic|مانهوا|دوجينشي|كوميكس/.test(categoryText)) continue;
       seen.add(url);
       result.items.push({ url, title, cover });
       if (result.items.length >= 500) break;
@@ -86,7 +92,7 @@
       const url = sourceUrl(a.href);
       if (!url) continue;
       const p = new URL(url);
-      if (!/^\/manga(?:\/page\/\d+\/?)?$/i.test(p.pathname)) continue;
+      if (!/^\/(?:manga(?:\/(?:page\/\d+\/?)?)?|page\/\d+\/?)?$/i.test(p.pathname)) continue;
       const page = pageFromUrl(p);
       const label = text(a.textContent || a.getAttribute("aria-label"));
       const numeric = /^\d+$/.test(label) ? Number(label) : 0;
@@ -127,17 +133,22 @@
     result.incomplete = !archiveBottom && archiveScan.passes >= 360;
   } else if (mode === "detail") {
     const chapterNodes = document.querySelectorAll(
+      "#chapter-list a[href*='/manga/'], .oneshot-reader .image-item a[href], " +
       ".wp-manga-chapter a[href], .listing-chapters_wrap a[href], .chapter-list a[href], " +
       ".chapters a[href], .main.version-chap a[href], a[href*='chapter-'], a[href*='/chapter/']"
     );
     for (const a of chapterNodes) {
       const url = sourceUrl(a.href);
       if (!url || seen.has(url) || url === here.href) continue;
-      const title = text(a.textContent || a.getAttribute("title") || a.parentElement?.textContent).slice(0, 220);
-      if (title.length < 2) continue;
+      const title = text(a.querySelector(".chapternum")?.textContent ||
+        a.textContent || a.getAttribute("title") || a.parentElement?.textContent).slice(0, 220) ||
+        "الفصل " + (result.chapters.length + 1);
       seen.add(url);
       result.chapters.push({ url, title, position: result.chapters.length });
       if (result.chapters.length >= 2500) break;
+    }
+    if (!result.chapters.length && document.querySelector(".oneshot-reader")) {
+      result.chapters.push({ url: here.href, title: "ونشوت", position: 0 });
     }
   } else if (mode === "chapter") {
     // Each page is a stable DOM snapshot; lazy-loaded images may appear only
@@ -149,6 +160,7 @@
       window.__qariMangaChapterScan = scan;
     }
     const imgSelector =
+      ".chapter_image img.wp-manga-chapter-img,.oneshot-reader .image-item img," +
       ".reading-content img,.page-break img,#readerarea img,.chapter-content img," +
       ".reader img,.rdminimal img,.chapter-page img,img[data-src],img[data-lazy-src]";
     // Merge each DOM snapshot into the stable list. A late image in front of
@@ -162,6 +174,22 @@
       visible.push(address);
       if (visible.length >= 5000) break;
     }
+    try {
+      const inline = [...document.scripts].map(s => s.textContent || "")
+        .find(s => /const\s+images\s*=\s*\[/.test(s));
+      const match = inline?.match(/const\s+images\s*=\s*(\[[\s\S]*?\]);/);
+      if (match) {
+        const entries = JSON.parse(match[1]);
+        for (const entry of entries.slice(0, 5000)) {
+          const decoded = atob(String(entry.url || ""));
+          const link = absolute(decoded);
+          if (link?.protocol === "https:" && !observed.has(link.href)) {
+            observed.add(link.href);
+            visible.push(link.href);
+          }
+        }
+      }
+    } catch (_) { /* Some themes do not embed an inline image list. */ }
     for (let i = 0; i < visible.length; i++) {
       const image = visible[i];
       if (scan.urls.includes(image)) continue;

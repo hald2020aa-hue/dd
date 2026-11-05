@@ -80,6 +80,9 @@ private fun ArabsCatalogScreen(
 ) {
     var search by remember(state.section) { mutableStateOf("") }
     var showBrowser by remember { mutableStateOf(state.works.isEmpty()) }
+    var filterOrder by remember(state.section) { mutableStateOf("new_chapter") }
+    var filterStatus by remember(state.section) { mutableStateOf("") }
+    var filterGenre by remember(state.section) { mutableStateOf("") }
     BackHandler(state.selectedWork != null || state.selectedChapter != null) {
         engine.backToCatalog()
     }
@@ -101,6 +104,56 @@ private fun ArabsCatalogScreen(
                             Text(section.title)
                         }
                     }
+                }
+            }
+            Text("الفلاتر: الترتيب والحالة والتصنيفات", style = MaterialTheme.typography.titleMedium)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                items(listOf("آخر تحديث" to "new_chapter", "الأحدث" to "new-manga",
+                    "أبجدي" to "alphabet")) { (label, value) ->
+                    if (filterOrder == value) Button(onClick = { filterOrder = value }) { Text(label) }
+                    else OutlinedButton(onClick = { filterOrder = value }) { Text(label) }
+                }
+            }
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                items(listOf("الكل" to "", "مستمر" to "on-going", "مكتمل" to "end",
+                    "متوقف" to "on-hold", "ملغي" to "canceled")) { (label, value) ->
+                    if (filterStatus == value) Button(onClick = { filterStatus = value }) { Text(label) }
+                    else OutlinedButton(onClick = { filterStatus = value }) { Text(label) }
+                }
+            }
+            OutlinedTextField(
+                value = filterGenre,
+                onValueChange = { filterGenre = it.take(80) },
+                label = { Text("التصنيف حسب اسم الموقع (اختياري)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedButton(onClick = {
+                engine.loadGenreOptions()
+                showBrowser = true
+            }) { Text("تحميل تصنيفات الموقع") }
+            if (state.genreOptions.isNotEmpty()) {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    items(state.genreOptions) { genre ->
+                        if (filterGenre == genre) Button(onClick = { filterGenre = genre }) { Text(genre) }
+                        else OutlinedButton(onClick = { filterGenre = genre }) { Text(genre) }
+                    }
+                }
+            }
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                item {
+                    Button(onClick = {
+                        engine.applyFilters(filterOrder, filterStatus, filterGenre)
+                        showBrowser = true
+                    }) { Text("تطبيق الفلاتر") }
+                }
+                item {
+                    OutlinedButton(onClick = {
+                        filterOrder = "new_chapter"
+                        filterStatus = ""
+                        filterGenre = ""
+                        engine.clearFilters()
+                    }) { Text("إلغاء الفلاتر") }
                 }
             }
             Text(
@@ -181,7 +234,8 @@ private fun ArabsCatalogScreen(
                         it.title.contains(search, ignoreCase = true)
                     }
                 }
-                Text("العناوين المحفوظة (${filtered.size}) — بدون إعادة استيراد", style = MaterialTheme.typography.titleMedium)
+                Text((if (state.filterActive) "نتائج الفلاتر" else "العناوين المحفوظة") +
+                    " (${filtered.size}) — بدون إعادة استيراد", style = MaterialTheme.typography.titleMedium)
                 LazyColumn(modifier = Modifier.weight(1f)) {
                     items(filtered, key = { it.url }) { work ->
                         Card(
@@ -207,7 +261,7 @@ private fun ArabsCatalogScreen(
                         }
                     }
                     if (filtered.isEmpty()) item {
-                        Text("لا توجد عناوين محفوظة لهذا القسم. افتح الموقع، أكمل التحقق، ثم اضغط استيراد تلقائي.")
+                        Text("لا توجد نتائج بعد. أكمل التحقق؛ يتم استخراج العناصر تلقائيًا بعد ظهورها.")
                     }
                 }
             }

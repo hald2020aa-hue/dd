@@ -66,6 +66,25 @@ class ArabsHentaiStore(context: Context) : SQLiteOpenHelper(
         }
     }
 
+    /** Filter previews are cached, but may never change unfiltered page checkpoints. */
+    fun saveFilteredWorks(section: ArabsSection, cards: List<ArabsWork>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            cards.distinctBy { it.url }.forEach { work ->
+                if (ArabsSection.safeUrl(work.url) == null || work.title.isBlank()) return@forEach
+                db.insertWithOnConflict("works", null, ContentValues().apply {
+                    put("section", section.name)
+                    put("url", work.url)
+                    put("title", work.title.take(250))
+                    put("cover", work.cover.take(1500))
+                    put("updated_at", System.currentTimeMillis())
+                }, SQLiteDatabase.CONFLICT_IGNORE)
+            }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
     fun chapters(workUrl: String): List<ArabsChapter> = readableDatabase.query(
         "chapters", arrayOf("url", "title", "position"), "work_url=?",
         arrayOf(workUrl), null, null, "position ASC",
